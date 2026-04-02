@@ -251,7 +251,7 @@ def get_projection(target_name, target_season, dataset):
     season_counts = dataset.groupby("Player")["Season"].nunique()
     experienced = season_counts[season_counts > 3].index
     comps_pool = cohort[cohort["Player"].isin(experienced)]
-    top_comps = comps_pool.head(5)[["Player", "Season", "Age", "pSPAR", "predict_all_toi", "weight"]].copy()
+    top_comps = comps_pool.head(10)[["Player", "Season", "Age", "pSPAR", "predict_all_toi", "weight"]].copy()
     top_comps.columns = ["Player", "Season", "Age", "pSPAR", "TOI", "Similarity"]
 
     return proj_df, contract_table, top_comps
@@ -398,7 +398,7 @@ def get_projection_v2(target_name, target_season, dataset, survival_table,
     season_counts = dataset.groupby("Player")["Season"].nunique()
     experienced = season_counts[season_counts > 3].index
     comps_pool = cohort[cohort["Player"].isin(experienced)]
-    top_comps = comps_pool.head(5)[["Player", "Season", "Age", "pSPAR", "predict_all_toi", "base_weight"]].copy()
+    top_comps = comps_pool.head(10)[["Player", "Season", "Age", "pSPAR", "predict_all_toi", "base_weight"]].copy()
     top_comps.columns = ["Player", "Season", "Age", "pSPAR", "TOI", "Similarity"]
 
     return proj_df, contract_table, top_comps
