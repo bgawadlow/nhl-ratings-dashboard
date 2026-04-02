@@ -27,7 +27,6 @@ def load_data():
     ratings = pd.read_csv(DATA_DIR / "ratings.csv")
     gar = pd.read_csv(DATA_DIR / "gar.csv")
     spar = pd.read_csv(DATA_DIR / "spar.csv")
-    projections = pd.read_csv(DATA_DIR / "projections.csv")
     skating = pd.read_csv(DATA_DIR / "skating.csv")
     draft_path = DATA_DIR / "draft_info.csv"
     if draft_path.exists():
@@ -37,10 +36,10 @@ def load_data():
         )
     else:
         draft_info = pd.DataFrame(columns=["Player", "Draft Yr", "Draft Ov", "Player_Key"])
-    return ratings, gar, spar, projections, skating, draft_info
+    return ratings, gar, spar, skating, draft_info
 
 
-ratings, gar, spar, projections, skating, draft_info = load_data()
+ratings, gar, spar, skating, draft_info = load_data()
 
 # ── Sidebar Filters ─────────────────────────────────────────────────────────
 st.sidebar.title("Filters")
@@ -106,8 +105,8 @@ st.caption(
 )
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_ratings, tab_gar, tab_projections, tab_contract, tab_toi, tab_player = st.tabs(
-    ["Ratings", "GAR / SPAR", "Per-60 Projections", "Contract Value", "TOI Adjustor", "Player Lookup"]
+tab_ratings, tab_gar, tab_contract, tab_toi, tab_player = st.tabs(
+    ["Ratings", "GAR / SPAR", "Contract Value", "TOI Adjustor", "Player Lookup"]
 )
 
 # ── Tab 1: Ratings Table ────────────────────────────────────────────────────
@@ -173,43 +172,7 @@ with tab_gar:
         hide_index=True,
     )
 
-# ── Tab 3: Per-60 Projections ───────────────────────────────────────────────
-with tab_projections:
-    st.caption("Current season (25-26) per-60-minute rate projections")
-
-    proj_filtered = projections.copy()
-    if selected_pos != "All":
-        proj_filtered = proj_filtered[proj_filtered["Position"] == selected_pos]
-    if selected_teams:
-        proj_filtered = proj_filtered[proj_filtered["Team"].isin(selected_teams)]
-    if search:
-        proj_filtered = proj_filtered[
-            proj_filtered["Player"].str.contains(search, case=False, na=False)
-        ]
-
-    proj_cols = [
-        "Player", "Position", "Team", "TOI/GP", "EV TOI/GP",
-        "PP TOI/GP", "SH TOI/GP", "EVO/60", "EVD/60", "PPO/60",
-        "SHD/60", "TAKE/60", "DRAW/60",
-    ]
-    available_proj = [c for c in proj_cols if c in proj_filtered.columns]
-    df_proj = proj_filtered[available_proj].sort_values(
-        "TOI/GP", ascending=False
-    )
-
-    fmt_proj = {
-        col: "{:.2f}"
-        for col in df_proj.select_dtypes(include="number").columns
-    }
-
-    st.dataframe(
-        df_proj.style.format(fmt_proj, na_rep="—"),
-        use_container_width=True,
-        height=700,
-        hide_index=True,
-    )
-
-# ── Tab 4: Contract Value ──────────────────────────────────────────────────
+# ── Tab 3: Contract Value ──────────────────────────────────────────────────
 with tab_contract:
     st.caption("Similarity-based aging curve projections & market value analysis")
 
@@ -238,7 +201,7 @@ with tab_contract:
 
     @st.cache_data
     def build_scaled_dataset(_spar_df, _draft_df):
-        """Merge SPAR + draft info, compute deltas & z-scores."""
+        """Merge SPAR + draft info, compute deltas, per-60 rates & z-scores."""
         df = _spar_df.copy()
 
         # Join draft info
@@ -265,6 +228,19 @@ with tab_contract:
             if col in df.columns:
                 df[col] = df[col].fillna(0)
 
+        # Compute EV TOI and per-60 rates (for v2)
+        df["ev_toi"] = (
+            df["predict_all_toi"]
+            - df["predict_pp_toi"].fillna(0)
+            - df["predict_sh_toi"].fillna(0)
+        )
+        df["rate_EVO"] = np.where(df["ev_toi"] > 0, df["pEVO_SPAR"] * 60 / (df["ev_toi"] * 82), 0)
+        df["rate_EVD"] = np.where(df["ev_toi"] > 0, df["pEVD_SPAR"] * 60 / (df["ev_toi"] * 82), 0)
+        df["rate_PPO"] = np.where(df["predict_pp_toi"] > 0, df["pPPO_SPAR"] * 60 / (df["predict_pp_toi"] * 82), 0)
+        df["rate_SHD"] = np.where(df["predict_sh_toi"] > 0, df["pSHD_SPAR"] * 60 / (df["predict_sh_toi"] * 82), 0)
+        df["rate_TAKE"] = np.where(df["predict_all_toi"] > 0, df["pTAKE_SPAR"] * 60 / (df["predict_all_toi"] * 82), 0)
+        df["rate_DRAW"] = np.where(df["predict_all_toi"] > 0, df["pDRAW_SPAR"] * 60 / (df["predict_all_toi"] * 82), 0)
+
         # Compute deltas (year-over-year change)
         df = df.sort_values(["Player", "Season_Num"])
         for var in PERF_VARS:
@@ -288,6 +264,50 @@ with tab_contract:
 
     df_scaled = build_scaled_dataset(spar, draft_info)
 
+    # ── Survival table for v2 ──
+    @st.cache_data
+    def build_survival_table(_df):
+        """P(still playing next season | position, age, SPAR bucket)."""
+        df = _df.copy()
+        df["spar_bucket"] = pd.cut(
+            df["pSPAR"], bins=[-np.inf, 0, 3, 7, 12, np.inf],
+            labels=["below_repl", "low", "mid", "high", "elite"],
+        )
+        df = df.sort_values(["Player", "Age"])
+        df["has_next"] = df.groupby("Player")["Age"].shift(-1) == df["Age"] + 1
+        df["has_next"] = df["has_next"].fillna(False).astype(int)
+
+        surv = (
+            df.groupby(["Position", "Age", "spar_bucket"])
+            .agg(n=("has_next", "count"), survived=("has_next", "sum"))
+            .reset_index()
+        )
+        surv["rate"] = np.where(surv["n"] >= 10, surv["survived"] / surv["n"], np.nan)
+
+        # Fallback: position-age average
+        pos_age = (
+            df.groupby(["Position", "Age"])["has_next"]
+            .mean().reset_index(name="rate_avg")
+        )
+        surv = surv.merge(pos_age, on=["Position", "Age"], how="left")
+        surv["rate"] = surv["rate"].fillna(surv["rate_avg"]).fillna(0.5)
+        return surv
+
+    survival_table = build_survival_table(df_scaled)
+
+    def get_survival_prob(pos, age, spar_val, surv_tbl):
+        bucket = pd.cut(
+            [spar_val], bins=[-np.inf, 0, 3, 7, 12, np.inf],
+            labels=["below_repl", "low", "mid", "high", "elite"],
+        )[0]
+        match = surv_tbl[
+            (surv_tbl["Position"] == pos)
+            & (surv_tbl["Age"] == age)
+            & (surv_tbl["spar_bucket"] == bucket)
+        ]
+        return float(match["rate"].iloc[0]) if not match.empty else 0.7
+
+    # ── v1 projection ──
     def get_projection(target_name, target_season, dataset):
         """Run similarity-based projection for a player."""
         target = dataset[(dataset["Player"] == target_name) & (dataset["Season"] == target_season)]
@@ -390,16 +410,172 @@ with tab_contract:
 
         return proj_df, contract_table, top_comps
 
+    # ── v2 projection (component-level aging, decay, TOI-split, survival) ──
+    def get_projection_v2(target_name, target_season, dataset, decay_rate=0.85):
+        """v2: component-level aging, similarity decay, TOI-split, survival bias."""
+        target = dataset[(dataset["Player"] == target_name) & (dataset["Season"] == target_season)]
+        if target.empty:
+            return None, None, None
+        target = target.iloc[0]
+        t_age = int(target["Age"])
+        t_pos = target["Position"]
+
+        # Similarity (same as v1)
+        delta_vars_v = [f"d_{v}" for v in PERF_VARS if v in dataset.columns]
+        active_vars = (
+            [v for v in PERF_VARS if v in dataset.columns]
+            + delta_vars_v
+            + (["Draft_Ov_Log"] if t_age <= 26 else [])
+        )
+        z_vars = [f"z_{v}" for v in active_vars if f"z_{v}" in dataset.columns]
+        target_stats = target[z_vars].values.astype(float)
+
+        cohort = dataset[
+            (dataset["Position"] == t_pos)
+            & (dataset["Age"] == t_age)
+            & (dataset["Player"] != target_name)
+        ].copy()
+        if cohort.empty:
+            return None, None, None
+
+        cohort_stats = cohort[z_vars].values.astype(float)
+        dists = np.sqrt(np.nansum((cohort_stats - target_stats) ** 2, axis=1))
+        cohort["base_weight"] = 1 / (dists ** 2 + 0.05)
+        cohort = cohort.sort_values("base_weight", ascending=False)
+
+        # Current per-60 rates and TOI
+        rate_keys = ["rate_EVO", "rate_EVD", "rate_PPO", "rate_SHD", "rate_TAKE", "rate_DRAW"]
+        curr_rates = {k: float(target[k]) for k in rate_keys}
+        curr_toi = {
+            "ev": float(target["ev_toi"]),
+            "pp": float(target.get("predict_pp_toi", 0) or 0),
+            "sh": float(target.get("predict_sh_toi", 0) or 0),
+        }
+
+        # 8-year component-level projection
+        projections_list = []
+        for i in range(1, 9):
+            next_age = t_age + i
+
+            # Find comp transitions
+            comp_players = cohort["Player"].values
+            delta_pool = dataset[dataset["Player"].isin(comp_players)]
+            pairs = delta_pool[delta_pool["Age"].isin([next_age - 1, next_age])]
+            pairs = pairs.groupby("Player").filter(lambda g: len(g) == 2)
+
+            if not pairs.empty:
+                pairs_sorted = pairs.sort_values(["Player", "Age"])
+                prev = pairs_sorted.groupby("Player").nth(0).reset_index()
+                curr = pairs_sorted.groupby("Player").nth(1).reset_index()
+                yoy = pd.DataFrame({"Player": prev["Player"]})
+                for rk in rate_keys:
+                    yoy[f"d_{rk}"] = curr[rk].values - prev[rk].values
+                yoy["d_ev_toi"] = curr["ev_toi"].values - prev["ev_toi"].values
+                yoy["d_pp_toi"] = curr["predict_pp_toi"].fillna(0).values - prev["predict_pp_toi"].fillna(0).values
+                yoy["d_sh_toi"] = curr["predict_sh_toi"].fillna(0).values - prev["predict_sh_toi"].fillna(0).values
+
+                yoy = yoy.merge(cohort[["Player", "base_weight"]], on="Player")
+                yoy["weight"] = yoy["base_weight"] * (decay_rate ** i)
+
+                w = yoy["weight"].values
+                avg_d = {col: np.average(yoy[col], weights=w) for col in yoy.columns if col.startswith("d_")}
+            else:
+                avg_d = {f"d_{rk}": -0.001 for rk in rate_keys}
+                avg_d["d_ev_toi"] = -0.3
+                avg_d["d_pp_toi"] = -0.05
+                avg_d["d_sh_toi"] = -0.02
+
+            # Update rates
+            for rk in rate_keys:
+                curr_rates[rk] += avg_d.get(f"d_{rk}", 0)
+
+            # Update TOI (floor at 0)
+            curr_toi["ev"] = max(curr_toi["ev"] + avg_d.get("d_ev_toi", 0), 0)
+            curr_toi["pp"] = max(curr_toi["pp"] + avg_d.get("d_pp_toi", 0), 0)
+            curr_toi["sh"] = max(curr_toi["sh"] + avg_d.get("d_sh_toi", 0), 0)
+            all_toi = curr_toi["ev"] + curr_toi["pp"] + curr_toi["sh"]
+
+            # Recombine: component = (rate/60) * toi * 82
+            comp_vals = {
+                "pEVO": (curr_rates["rate_EVO"] / 60) * curr_toi["ev"] * 82,
+                "pEVD": (curr_rates["rate_EVD"] / 60) * curr_toi["ev"] * 82,
+                "pPPO": (curr_rates["rate_PPO"] / 60) * curr_toi["pp"] * 82,
+                "pSHD": (curr_rates["rate_SHD"] / 60) * curr_toi["sh"] * 82,
+                "pTAKE": (curr_rates["rate_TAKE"] / 60) * all_toi * 82,
+                "pDRAW": (curr_rates["rate_DRAW"] / 60) * all_toi * 82,
+            }
+            raw_spar = sum(comp_vals.values())
+
+            # Survival bias correction
+            surv_prob = get_survival_prob(t_pos, next_age - 1, raw_spar, survival_table)
+            adj_spar = raw_spar * surv_prob
+
+            projections_list.append({
+                "Age": next_age,
+                "Predicted_pSPAR": adj_spar,
+                "Raw_pSPAR": raw_spar,
+                "Survival_Prob": surv_prob,
+                "TOI": round(all_toi, 1),
+                "Season_Index": f"+{i}",
+            })
+
+        # Financials
+        o_base, o_mult = OVR_PARAMS[t_pos]
+        coefs = MARKET_COEFS[t_pos]
+
+        proj_df = pd.DataFrame(projections_list)
+        proj_df = pd.concat([
+            pd.DataFrame([{
+                "Age": t_age,
+                "Predicted_pSPAR": float(target["pSPAR"]),
+                "Raw_pSPAR": float(target["pSPAR"]),
+                "Survival_Prob": 1.0,
+                "TOI": round(float(target["predict_all_toi"]), 1),
+                "Season_Index": "Current",
+            }]),
+            proj_df,
+        ]).reset_index(drop=True)
+
+        proj_df["Predicted_OVR"] = (o_base + o_mult * proj_df["Predicted_pSPAR"]).round(0).astype(int)
+
+        caps = [95.5, 104.0, 113.5]
+        for j in range(3, 9):
+            caps.append(round(113.5 * (1.05 ** (j - 2)), 1))
+        proj_df["Proj_Cap_M"] = caps[: len(proj_df)]
+        proj_df["Market_Share_Pct"] = coefs["intercept"] + coefs["slope"] * proj_df["Predicted_pSPAR"]
+        proj_df["Market_Value_M"] = proj_df["Market_Share_Pct"] * proj_df["Proj_Cap_M"]
+
+        future = proj_df[proj_df["Season_Index"] != "Current"].reset_index(drop=True)
+        contract_table = pd.DataFrame({
+            "Term": range(1, 9),
+            "Total_Value_M": future["Market_Value_M"].cumsum().round(2),
+        })
+        contract_table["AAV_M"] = (contract_table["Total_Value_M"] / contract_table["Term"]).round(3)
+
+        season_counts = dataset.groupby("Player")["Season"].nunique()
+        experienced = season_counts[season_counts > 3].index
+        comps_pool = cohort[cohort["Player"].isin(experienced)]
+        top_comps = comps_pool.head(5)[["Player", "Season", "Age", "pSPAR", "predict_all_toi", "base_weight"]].copy()
+        top_comps.columns = ["Player", "Season", "Age", "pSPAR", "TOI", "Similarity"]
+
+        return proj_df, contract_table, top_comps
+
     # ── UI ──
-    cv_col1, cv_col2 = st.columns([2, 1])
+    cv_col1, cv_col2, cv_col3 = st.columns([2, 1, 1])
     with cv_col1:
         cv_players = sorted(spar[spar["Season"] == (all_seasons[0] if all_seasons else "25-26")]["Player"].unique())
         cv_player = st.selectbox("Select Player", cv_players, index=None, placeholder="Type to search...", key="cv_player")
     with cv_col2:
         cv_season = st.selectbox("Season", all_seasons, index=0, key="cv_season")
+    with cv_col3:
+        model_version = st.radio("Model", ["v1", "v2"], index=1, horizontal=True, key="cv_model",
+                                  help="v2: component aging, decay weights, TOI-split, survival bias")
 
     if cv_player:
-        proj_df, contract_table, top_comps = get_projection(cv_player, cv_season, df_scaled)
+        if model_version == "v2":
+            proj_df, contract_table, top_comps = get_projection_v2(cv_player, cv_season, df_scaled)
+        else:
+            proj_df, contract_table, top_comps = get_projection(cv_player, cv_season, df_scaled)
 
         if proj_df is not None:
             # Headline
@@ -412,9 +588,14 @@ with tab_contract:
 
             # Projection table
             st.markdown("**8-Year Aging Curve Projection**")
-            proj_display = proj_df[["Season_Index", "Age", "Predicted_pSPAR", "Predicted_OVR", "Proj_Cap_M", "Market_Value_M"]].copy()
-            proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "Proj Cap ($M)", "Market Value ($M)"]
-            fmt_proj_cv = {"pSPAR": "{:.2f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
+            if model_version == "v2" and "Survival_Prob" in proj_df.columns:
+                proj_display = proj_df[["Season_Index", "Age", "Raw_pSPAR", "Survival_Prob", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Proj_Cap_M", "Market_Value_M"]].copy()
+                proj_display.columns = ["Season", "Age", "Raw pSPAR", "Surv %", "Adj pSPAR", "OVR", "TOI", "Proj Cap ($M)", "Market Value ($M)"]
+                fmt_proj_cv = {"Raw pSPAR": "{:.2f}", "Surv %": "{:.1%}", "Adj pSPAR": "{:.2f}", "TOI": "{:.1f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
+            else:
+                proj_display = proj_df[["Season_Index", "Age", "Predicted_pSPAR", "Predicted_OVR", "Proj_Cap_M", "Market_Value_M"]].copy()
+                proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "Proj Cap ($M)", "Market Value ($M)"]
+                fmt_proj_cv = {"pSPAR": "{:.2f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
             st.dataframe(proj_display.style.format(fmt_proj_cv, na_rep="—"), use_container_width=True, hide_index=True)
 
             # Contract term AAV table
@@ -672,17 +853,6 @@ with tab_player:
             }
             st.bar_chart(pd.Series(gar_components))
             st.metric("Total pGAR", f"{latest_gar.get('pGAR', 0):.2f}")
-
-        # ── Per-60 rates ──
-        player_proj = projections[projections["Player"] == selected_player]
-        if not player_proj.empty:
-            p60 = player_proj.iloc[0]
-            st.markdown("**Per-60 Rates (25-26 Projection)**")
-            rate_cols = ["EVO/60", "EVD/60", "PPO/60", "SHD/60", "TAKE/60", "DRAW/60"]
-            available_rates = [c for c in rate_cols if c in player_proj.columns]
-            rates = {col: p60[col] for col in available_rates if pd.notna(p60[col])}
-            if rates:
-                st.bar_chart(pd.Series(rates))
 
         # ── Skating ──
         player_skating = skating[skating["Player"] == selected_player]
