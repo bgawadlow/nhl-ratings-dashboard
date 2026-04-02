@@ -607,21 +607,15 @@ with tab_contract:
         return proj_df, contract_table, top_comps
 
     # ── UI ──
-    cv_col1, cv_col2, cv_col3 = st.columns([2, 1, 1])
+    cv_col1, cv_col2 = st.columns([2, 1])
     with cv_col1:
         cv_players = sorted(spar[spar["Season"] == (all_seasons[0] if all_seasons else "25-26")]["Player"].unique())
         cv_player = st.selectbox("Select Player", cv_players, index=None, placeholder="Type to search...", key="cv_player")
     with cv_col2:
         cv_season = st.selectbox("Season", all_seasons, index=0, key="cv_season")
-    with cv_col3:
-        model_version = st.radio("Model", ["v1", "v2"], index=1, horizontal=True, key="cv_model",
-                                  help="v2: component aging, decay weights, TOI-split, survival bias")
 
     if cv_player:
-        if model_version == "v2":
-            proj_df, contract_table, top_comps = get_projection_v2(cv_player, cv_season, df_scaled)
-        else:
-            proj_df, contract_table, top_comps = get_projection(cv_player, cv_season, df_scaled)
+        proj_df, contract_table, top_comps = get_projection(cv_player, cv_season, df_scaled)
 
         if proj_df is not None:
             # Headline
@@ -634,14 +628,9 @@ with tab_contract:
 
             # Projection table
             st.markdown("**8-Year Aging Curve Projection**")
-            if model_version == "v2" and "Survival_Prob" in proj_df.columns:
-                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]].copy()
-                proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "TOI", "Surv %", "Proj Cap ($M)", "Market Value ($M)"]
-                fmt_proj_cv = {"pSPAR": "{:.2f}", "Surv %": "{:.1%}", "TOI": "{:.1f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
-            else:
-                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "Proj_Cap_M", "Market_Value_M"]].copy()
-                proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "Proj Cap ($M)", "Market Value ($M)"]
-                fmt_proj_cv = {"pSPAR": "{:.2f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
+            proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "Proj_Cap_M", "Market_Value_M"]].copy()
+            proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "Proj Cap ($M)", "Market Value ($M)"]
+            fmt_proj_cv = {"pSPAR": "{:.2f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
             st.dataframe(proj_display.style.format(fmt_proj_cv, na_rep="—"), use_container_width=True, hide_index=True)
 
             # Contract term AAV table
@@ -947,7 +936,7 @@ with tab_player:
                 .select_dtypes(include="number")
                 .columns
             }
-            for col in ["G", "PTS"]:
+            for col in ["OVR", "G", "PTS"]:
                 if col in fmt_hist:
                     fmt_hist[col] = "{:.0f}"
             st.dataframe(
