@@ -947,9 +947,20 @@ with tab_player:
 
         # ── OVR trend chart ──
         if len(player_ratings) > 1:
+            import altair as alt
             st.markdown("**OVR Trend**")
-            chart_data = player_ratings[["Season", "OVR"]].set_index("Season")
-            st.line_chart(chart_data)
+            chart_data = player_ratings[["Season", "OVR"]].copy()
+            ovr_chart = (
+                alt.Chart(chart_data)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("Season:N", sort=None),
+                    y=alt.Y("OVR:Q", scale=alt.Scale(domain=[65, 100])),
+                    tooltip=["Season", "OVR"],
+                )
+                .properties(height=300)
+            )
+            st.altair_chart(ovr_chart, use_container_width=True)
 
         # ── GAR breakdown (latest season) ──
         player_gar = gar[gar["Player"] == selected_player].sort_values(
