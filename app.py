@@ -106,6 +106,7 @@ with tab_ratings:
     display_cols = [
         "Player", "Season", "Team", "Position", "OVR", "Off", "Def",
         "Draw", "Take", "pSPAR", "TOI/GP", "G", "PTS", "Hits", "Blocks",
+        "TOI/PP", "EV G", "EV PTS", "FO",
     ]
     available = [c for c in display_cols if c in filtered_ratings.columns]
     df_show = filtered_ratings[available].sort_values("OVR", ascending=False)
@@ -115,8 +116,11 @@ with tab_ratings:
         col: "{:.2f}"
         for col in df_show.select_dtypes(include="number").columns
     }
+    # OVR as whole number
+    if "OVR" in fmt:
+        fmt["OVR"] = "{:.0f}"
     # Keep integer-like columns as integers
-    for col in ["G", "PTS", "Hits", "Blocks"]:
+    for col in ["G", "PTS", "Hits", "Blocks", "EV G", "EV PTS", "FO"]:
         if col in fmt:
             fmt[col] = "{:.0f}"
 
@@ -217,7 +221,7 @@ with tab_player:
         if not player_ratings.empty:
             latest = player_ratings.iloc[0]
             col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("OVR", f"{latest['OVR']:.1f}")
+            col1.metric("OVR", f"{latest['OVR']:.0f}")
             col2.metric("Off", f"{latest['Off']:.2f}")
             col3.metric("Def", f"{latest['Def']:.2f}")
             col4.metric("pSPAR", f"{latest['pSPAR']:.2f}")
