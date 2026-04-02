@@ -106,8 +106,8 @@ st.caption(
 )
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_ratings, tab_gar, tab_projections, tab_contract, tab_player = st.tabs(
-    ["Ratings", "GAR / SPAR", "Per-60 Projections", "Contract Value", "Player Lookup"]
+tab_ratings, tab_gar, tab_projections, tab_contract, tab_toi, tab_player = st.tabs(
+    ["Ratings", "GAR / SPAR", "Per-60 Projections", "Contract Value", "TOI Adjustor", "Player Lookup"]
 )
 
 # ── Tab 1: Ratings Table ────────────────────────────────────────────────────
@@ -218,7 +218,7 @@ with tab_contract:
         "F": {"intercept": 0.0118168, "slope": 0.0073865},
         "D": {"intercept": 0.0118966, "slope": 0.0082860},
     }
-    OVR_PARAMS = {"F": (77.5, 0.9), "D": (78.25, 1.1)}
+    OVR_PARAMS = {"F": (77.5, 0.875), "D": (78.25, 1.075)}
 
     DRAFT_MAX_LOOKUP = dict(zip(
         range(1981, 2026),
@@ -381,7 +381,11 @@ with tab_contract:
         })
         contract_table["AAV_M"] = (contract_table["Total_Value_M"] / contract_table["Term"]).round(3)
 
-        top_comps = cohort.head(5)[["Player", "Season", "Age", "pSPAR", "predict_all_toi", "weight"]].copy()
+        # Filter comps to players with >3 seasons of data
+        season_counts = dataset.groupby("Player")["Season"].nunique()
+        experienced = season_counts[season_counts > 3].index
+        comps_pool = cohort[cohort["Player"].isin(experienced)]
+        top_comps = comps_pool.head(5)[["Player", "Season", "Age", "pSPAR", "predict_all_toi", "weight"]].copy()
         top_comps.columns = ["Player", "Season", "Age", "pSPAR", "TOI", "Similarity"]
 
         return proj_df, contract_table, top_comps
@@ -458,7 +462,143 @@ with tab_contract:
         else:
             st.warning(f"No data found for {cv_player} in {cv_season}")
 
-# ── Tab 5: Player Lookup ────────────────────────────────────────────────────
+# ── Tab 5: TOI Adjustor ────────────────────────────────────────────────────
+with tab_toi:
+    st.caption(
+        "Adjust a player's EV / PP / SH ice time and see how their SPAR & OVR change. "
+        "Per-60 rates stay fixed — only usage changes."
+    )
+
+    # OVR formula
+    OVR_F = lambda spar_val: 77.5 + 0.875 * spar_val
+    OVR_D = lambda spar_val: 78.25 + 1.075 * spar_val
+
+    # Player selection (current season only from SPAR)
+    curr = all_seasons[0] if all_seasons else "25-26"
+    spar_curr = spar[spar["Season"] == curr].copy()
+
+    # Compute EV TOI
+    spar_curr["EV_TOI"] = (
+        spar_curr["predict_all_toi"]
+        - spar_curr["predict_pp_toi"].fillna(0)
+        - spar_curr["predict_sh_toi"].fillna(0)
+    )
+
+    toi_players = sorted(spar_curr["Player"].unique())
+    toi_player = st.selectbox(
+        "Select Player", toi_players, index=None,
+        placeholder="Type to search...", key="toi_player",
+    )
+
+    if toi_player:
+        row = spar_curr[spar_curr["Player"] == toi_player].iloc[0]
+        pos = row["Position"]
+
+        old_ev = float(row["EV_TOI"])
+        old_pp = float(row.get("predict_pp_toi", 0) or 0)
+        old_sh = float(row.get("predict_sh_toi", 0) or 0)
+        old_all = float(row["predict_all_toi"])
+
+        # Current per-60 above-replacement rates (back-calculated)
+        # component = (rate/60) * toi * 82  →  rate/60 = component * 60 / (toi * 82)
+        def back_calc_rate(component, toi):
+            if toi == 0 or pd.isna(toi) or pd.isna(component):
+                return 0.0
+            return float(component) * 60 / (toi * 82)
+
+        rates = {
+            "pEVO_SPAR": back_calc_rate(row["pEVO_SPAR"], old_ev),
+            "pEVD_SPAR": back_calc_rate(row["pEVD_SPAR"], old_ev),
+            "pPPO_SPAR": back_calc_rate(row["pPPO_SPAR"], old_pp),
+            "pSHD_SPAR": back_calc_rate(row["pSHD_SPAR"], old_sh),
+            "pTAKE_SPAR": back_calc_rate(row["pTAKE_SPAR"], old_all),
+            "pDRAW_SPAR": back_calc_rate(row["pDRAW_SPAR"], old_all),
+        }
+
+        # Show current state
+        st.markdown(f"**{toi_player}** — {pos} — Current TOI/GP: {old_all:.1f} min")
+
+        st.markdown("---")
+        st.markdown("**Adjust Ice Time (minutes per game)**")
+        tc1, tc2, tc3 = st.columns(3)
+        with tc1:
+            new_ev = st.slider(
+                "EV TOI/GP", 0.0, 25.0, round(old_ev, 1), 0.5, key="toi_ev",
+            )
+        with tc2:
+            new_pp = st.slider(
+                "PP TOI/GP", 0.0, 8.0, round(old_pp, 1), 0.25, key="toi_pp",
+            )
+        with tc3:
+            new_sh = st.slider(
+                "SH TOI/GP", 0.0, 6.0, round(old_sh, 1), 0.25, key="toi_sh",
+            )
+        new_all = new_ev + new_pp + new_sh
+
+        # Recalculate SPAR components with new TOI
+        new_components = {
+            "EV Off (pEVO)": rates["pEVO_SPAR"] / 60 * new_ev * 82,
+            "EV Def (pEVD)": rates["pEVD_SPAR"] / 60 * new_ev * 82,
+            "PP Off (pPPO)": rates["pPPO_SPAR"] / 60 * new_pp * 82,
+            "SH Def (pSHD)": rates["pSHD_SPAR"] / 60 * new_sh * 82,
+            "Takeaways (pTAKE)": rates["pTAKE_SPAR"] / 60 * new_all * 82,
+            "Drawing (pDRAW)": rates["pDRAW_SPAR"] / 60 * new_all * 82,
+        }
+        new_spar = sum(new_components.values())
+        old_spar = float(row["pSPAR"])
+
+        ovr_fn = OVR_F if pos == "F" else OVR_D
+        new_ovr = round(ovr_fn(new_spar))
+        old_ovr = round(ovr_fn(old_spar))
+
+        # Display results
+        st.markdown("---")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("New TOI/GP", f"{new_all:.1f}", f"{new_all - old_all:+.1f}")
+        r2.metric("New pSPAR", f"{new_spar:.2f}", f"{new_spar - old_spar:+.2f}")
+        r3.metric("New OVR", f"{new_ovr}", f"{new_ovr - old_ovr:+d}")
+        r4.metric("Position", pos)
+
+        # Component breakdown table
+        st.markdown("**SPAR Component Breakdown**")
+        old_components = {
+            "EV Off (pEVO)": float(row["pEVO_SPAR"]),
+            "EV Def (pEVD)": float(row["pEVD_SPAR"]),
+            "PP Off (pPPO)": float(row["pPPO_SPAR"]),
+            "SH Def (pSHD)": float(row["pSHD_SPAR"]),
+            "Takeaways (pTAKE)": float(row["pTAKE_SPAR"]),
+            "Drawing (pDRAW)": float(row["pDRAW_SPAR"]),
+        }
+        comp_df = pd.DataFrame({
+            "Component": list(old_components.keys()),
+            "Original": list(old_components.values()),
+            "Adjusted": list(new_components.values()),
+            "Change": [new_components[k] - old_components[k] for k in old_components],
+        })
+        comp_df["TOI Used"] = ["EV", "EV", "PP", "SH", "Total", "Total"]
+        fmt_comp = {"Original": "{:.2f}", "Adjusted": "{:.2f}", "Change": "{:+.2f}"}
+        st.dataframe(
+            comp_df.style.format(fmt_comp, na_rep="—"),
+            use_container_width=True, hide_index=True,
+        )
+
+        # Per-60 rates reference
+        st.markdown("**Per-60 Above-Average Rates (Fixed)**")
+        rate_labels = {
+            "pEVO_SPAR": "EV Off/60", "pEVD_SPAR": "EV Def/60",
+            "pPPO_SPAR": "PP Off/60", "pSHD_SPAR": "SH Def/60",
+            "pTAKE_SPAR": "Take/60", "pDRAW_SPAR": "Draw/60",
+        }
+        rate_df = pd.DataFrame({
+            "Metric": list(rate_labels.values()),
+            "Per-60 Rate": [rates[k] for k in rate_labels],
+        })
+        st.dataframe(
+            rate_df.style.format({"Per-60 Rate": "{:.4f}"}),
+            use_container_width=True, hide_index=True,
+        )
+
+# ── Tab 6: Player Lookup ────────────────────────────────────────────────────
 with tab_player:
     all_players = sorted(ratings["Player"].dropna().unique())
     selected_player = st.selectbox(
