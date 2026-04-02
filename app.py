@@ -435,7 +435,8 @@ with tab_contract:
         return proj_df, contract_table, top_comps
 
     # ── v2 projection (component-level aging, decay, TOI-split, survival) ──
-    def get_projection_v2(target_name, target_season, dataset, decay_rate=0.85):
+    def get_projection_v2(target_name, target_season, dataset, decay_rate=0.85,
+                          era_decay=0.92):
         """v2: component-level aging, similarity decay, TOI-split, survival bias."""
         target = dataset[(dataset["Player"] == target_name) & (dataset["Season"] == target_season)]
         if target.empty:
@@ -499,7 +500,10 @@ with tab_contract:
                 yoy["d_sh_toi"] = curr["predict_sh_toi"].fillna(0).values - prev["predict_sh_toi"].fillna(0).values
 
                 yoy = yoy.merge(cohort[["Player", "base_weight"]], on="Player")
-                yoy["weight"] = yoy["base_weight"] * (decay_rate ** i)
+                # Era weighting: recent transitions count more
+                max_season = prev["Season_Num"].max()
+                yoy["era_weight"] = era_decay ** (max_season - prev["Season_Num"].values)
+                yoy["weight"] = yoy["base_weight"] * (decay_rate ** i) * yoy["era_weight"]
 
                 w = yoy["weight"].values
                 avg_d = {col: np.average(yoy[col], weights=w) for col in yoy.columns if col.startswith("d_")}
@@ -663,6 +667,49 @@ with tab_contract:
                 st.dataframe(top_comps.style.format(comp_fmt, na_rep="—"), use_container_width=True, hide_index=True)
         else:
             st.warning(f"No data found for {cv_player} in {cv_season}")
+
+    # ── Aging Curve by Era (diagnostic) ──
+    st.markdown("---")
+    with st.expander("Aging Curves by Era (diagnostic)", expanded=False):
+        st.caption(
+            "Average pSPAR by age, split by era. Tests whether peak performance "
+            "age is shifting later in recent years."
+        )
+        era_pos = st.radio("Position", ["F", "D"], horizontal=True, key="era_pos")
+        era_min_toi = st.slider("Min TOI/GP", 0.0, 15.0, 8.0, 0.5, key="era_min_toi",
+                                help="Filter to regulars only")
+
+        era_df = df_scaled[
+            (df_scaled["Position"] == era_pos)
+            & (df_scaled["predict_all_toi"] >= era_min_toi)
+            & (df_scaled["Age"] >= 18)
+            & (df_scaled["Age"] <= 40)
+        ].copy()
+
+        # Split into eras
+        era_df["Era"] = pd.cut(
+            era_df["Season_Num"],
+            bins=[2006, 2013, 2019, 2030],
+            labels=["07-13", "14-19", "20-26"],
+        )
+
+        era_curve = (
+            era_df.groupby(["Era", "Age"])["pSPAR"]
+            .mean()
+            .reset_index()
+        )
+
+        if not era_curve.empty:
+            chart_data = era_curve.pivot(index="Age", columns="Era", values="pSPAR")
+            st.line_chart(chart_data)
+
+            # Find peak age per era
+            peaks = era_curve.loc[era_curve.groupby("Era")["pSPAR"].idxmax()][["Era", "Age", "pSPAR"]]
+            peaks.columns = ["Era", "Peak Age", "Peak pSPAR"]
+            peaks["Peak pSPAR"] = peaks["Peak pSPAR"].round(2)
+            st.dataframe(peaks, use_container_width=True, hide_index=True)
+        else:
+            st.info("Not enough data for the selected filters.")
 
 # ── Tab 5: TOI Adjustor ────────────────────────────────────────────────────
 with tab_toi:
