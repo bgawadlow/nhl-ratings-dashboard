@@ -451,10 +451,10 @@ with tab_player:
         # ── Ratings history ──
         player_ratings = (
             ratings[ratings["Player"] == selected_player]
-            .sort_values("Season", ascending=False)
+            .sort_values("Season", ascending=True)
         )
         if not player_ratings.empty:
-            latest = player_ratings.iloc[0]
+            latest = player_ratings.iloc[-1]
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("OVR", f"{latest['OVR']:.0f}")
             col2.metric("Off", f"{latest['Off']:.2f}")
@@ -504,11 +504,11 @@ with tab_player:
 
         # ── SPAR breakdown ──
         player_spar = spar[spar["Player"] == selected_player].sort_values(
-            "Season", ascending=False
+            "Season", ascending=True
         )
         if not player_spar.empty:
             spar_seasons = player_spar["Season"].tolist()
-            spar_sel = st.selectbox("Season", spar_seasons, index=0, key="lookup_spar_season")
+            spar_sel = st.selectbox("Season", spar_seasons, index=len(spar_seasons) - 1, key="lookup_spar_season")
             sel_sp = player_spar[player_spar["Season"] == spar_sel].iloc[0]
             st.markdown(f"**SPAR Breakdown** ({spar_sel})")
             spar_components = pd.DataFrame({
