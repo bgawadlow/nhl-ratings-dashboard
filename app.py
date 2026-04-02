@@ -962,23 +962,37 @@ with tab_player:
             )
             st.altair_chart(ovr_chart, use_container_width=True)
 
-        # ── GAR breakdown (latest season) ──
-        player_gar = gar[gar["Player"] == selected_player].sort_values(
+        # ── SPAR breakdown (latest season) ──
+        player_spar = spar[spar["Player"] == selected_player].sort_values(
             "Season", ascending=False
         )
-        if not player_gar.empty:
-            latest_gar = player_gar.iloc[0]
-            st.markdown(f"**GAR Breakdown** ({latest_gar['Season']})")
-            gar_components = {
-                "EV Offense": latest_gar.get("pEVO_GAR", 0),
-                "EV Defense": latest_gar.get("pEVD_GAR", 0),
-                "PP Offense": latest_gar.get("pPPO_GAR", 0),
-                "SH Defense": latest_gar.get("pSHD_GAR", 0),
-                "Takeaways": latest_gar.get("pTAKE_GAR", 0),
-                "Drawing": latest_gar.get("pDRAW_GAR", 0),
-            }
-            st.bar_chart(pd.Series(gar_components))
-            st.metric("Total pGAR", f"{latest_gar.get('pGAR', 0):.2f}")
+        if not player_spar.empty:
+            latest_sp = player_spar.iloc[0]
+            st.markdown(f"**SPAR Breakdown** ({latest_sp['Season']})")
+            spar_components = pd.DataFrame({
+                "Component": ["EVO", "EVD", "PPO", "SHD", "Draw", "Take"],
+                "SPAR": [
+                    latest_sp.get("pEVO_SPAR", 0),
+                    latest_sp.get("pEVD_SPAR", 0),
+                    latest_sp.get("pPPO_SPAR", 0),
+                    latest_sp.get("pSHD_SPAR", 0),
+                    latest_sp.get("pDRAW_SPAR", 0),
+                    latest_sp.get("pTAKE_SPAR", 0),
+                ],
+            })
+            import altair as alt
+            spar_bar = (
+                alt.Chart(spar_components)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Component:N", sort=["EVO", "EVD", "PPO", "SHD", "Draw", "Take"]),
+                    y=alt.Y("SPAR:Q"),
+                    tooltip=["Component", "SPAR"],
+                )
+                .properties(height=250)
+            )
+            st.altair_chart(spar_bar, use_container_width=True)
+            st.metric("Total pSPAR", f"{latest_sp.get('pSPAR', 0):.2f}")
 
         # ── Skating ──
         player_skating = skating[skating["Player"] == selected_player]
