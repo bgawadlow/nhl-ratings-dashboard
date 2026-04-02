@@ -530,14 +530,12 @@ with tab_contract:
             }
             raw_spar = sum(comp_vals.values())
 
-            # Survival bias correction
+            # Survival probability (informational — not applied to projections)
             surv_prob = get_survival_prob(t_pos, next_age - 1, raw_spar, survival_table)
-            adj_spar = raw_spar * surv_prob
 
             projections_list.append({
                 "Age": next_age,
-                "Predicted_pSPAR": adj_spar,
-                "Raw_pSPAR": raw_spar,
+                "Predicted_pSPAR": raw_spar,
                 "Survival_Prob": surv_prob,
                 "TOI": round(all_toi, 1),
                 "Season_Index": f"+{i}",
@@ -552,7 +550,6 @@ with tab_contract:
             pd.DataFrame([{
                 "Age": t_age,
                 "Predicted_pSPAR": float(target["pSPAR"]),
-                "Raw_pSPAR": float(target["pSPAR"]),
                 "Survival_Prob": 1.0,
                 "TOI": round(float(target["predict_all_toi"]), 1),
                 "Season_Index": "Current",
@@ -613,9 +610,9 @@ with tab_contract:
             # Projection table
             st.markdown("**8-Year Aging Curve Projection**")
             if model_version == "v2" and "Survival_Prob" in proj_df.columns:
-                proj_display = proj_df[["Season_Index", "Age", "Raw_pSPAR", "Survival_Prob", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Proj_Cap_M", "Market_Value_M"]].copy()
-                proj_display.columns = ["Season", "Age", "Raw pSPAR", "Surv %", "Adj pSPAR", "OVR", "TOI", "Proj Cap ($M)", "Market Value ($M)"]
-                fmt_proj_cv = {"Raw pSPAR": "{:.2f}", "Surv %": "{:.1%}", "Adj pSPAR": "{:.2f}", "TOI": "{:.1f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
+                proj_display = proj_df[["Season_Index", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]].copy()
+                proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "TOI", "Surv %", "Proj Cap ($M)", "Market Value ($M)"]
+                fmt_proj_cv = {"pSPAR": "{:.2f}", "Surv %": "{:.1%}", "TOI": "{:.1f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
             else:
                 proj_display = proj_df[["Season_Index", "Age", "Predicted_pSPAR", "Predicted_OVR", "Proj_Cap_M", "Market_Value_M"]].copy()
                 proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "Proj Cap ($M)", "Market Value ($M)"]
