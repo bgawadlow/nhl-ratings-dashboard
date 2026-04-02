@@ -15,8 +15,32 @@ st.set_page_config(
     page_title="NHL 26 Ratings",
     page_icon="🏒",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
+
+# ── Mobile-friendly CSS ─────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* Collapse sidebar on mobile by default */
+@media (max-width: 768px) {
+    [data-testid="stSidebar"] { min-width: 0 !important; width: 0 !important; }
+    [data-testid="stSidebar"] > div { display: none; }
+    .block-container { padding: 1rem 0.5rem !important; max-width: 100% !important; }
+    h1 { font-size: 1.5rem !important; }
+    [data-testid="stMetricValue"] { font-size: 1.3rem !important; }
+    [data-testid="stMetricDelta"] { font-size: 0.75rem !important; }
+    /* Make tabs scrollable */
+    [data-testid="stTabs"] [role="tablist"] { overflow-x: auto; flex-wrap: nowrap; }
+    [data-testid="stTabs"] [role="tab"] { white-space: nowrap; font-size: 0.85rem; }
+    /* Make dataframes scroll horizontally */
+    [data-testid="stDataFrame"] { overflow-x: auto !important; }
+}
+/* General table improvements */
+[data-testid="stDataFrame"] div[data-testid="stDataFrameResizable"] {
+    overflow-x: auto;
+}
+</style>
+""", unsafe_allow_html=True)
 
 DATA_DIR = Path(__file__).parent / "data"
 
