@@ -331,6 +331,17 @@ with tab_contract:
         ]
         return float(match["rate"].iloc[0]) if not match.empty else 0.7
 
+    # Salary cap lookup — known caps by season start year
+    # Ratings labeled "25-26" are projections for 26-27, so "Current" = 26-27 cap
+    KNOWN_CAPS = {2026: 95.5, 2027: 104.0, 2028: 113.5}
+
+    def get_cap(season_start_year):
+        """Return projected salary cap ($M) for a given season start year."""
+        if season_start_year in KNOWN_CAPS:
+            return KNOWN_CAPS[season_start_year]
+        # 5% annual growth from 28-29 onward
+        return round(113.5 * (1.05 ** (season_start_year - 2028)), 1)
+
     # ── v1 projection ──
     def get_projection(target_name, target_season, dataset):
         """Run similarity-based projection for a player."""
@@ -408,11 +419,15 @@ with tab_contract:
 
         proj_df["Predicted_OVR"] = (o_base + o_mult * proj_df["Predicted_pSPAR"]).round(0).astype(int)
 
-        # Salary cap projections
-        caps = [95.5, 104.0, 113.5]  # Current, +1, +2
-        for i in range(3, 9):
-            caps.append(round(113.5 * (1.05 ** (i - 2)), 1))
-        proj_df["Proj_Cap_M"] = caps[: len(proj_df)]
+        # Salary cap projections — ratings are projections for next season
+        base_cap_year = int(target["Season_Num"]) + 1  # "25-26" → projects 26-27
+        proj_df["Proj_Cap_M"] = [get_cap(base_cap_year + i) for i in range(len(proj_df))]
+
+        # Add actual season labels
+        proj_df["Season_Label"] = [
+            f"{(base_cap_year + i) % 100 - 1:02d}-{(base_cap_year + i) % 100:02d}"
+            for i in range(len(proj_df))
+        ]
 
         proj_df["Market_Share_Pct"] = coefs["intercept"] + coefs["slope"] * proj_df["Predicted_pSPAR"]
         proj_df["Market_Value_M"] = proj_df["Market_Share_Pct"] * proj_df["Proj_Cap_M"]
@@ -563,10 +578,16 @@ with tab_contract:
 
         proj_df["Predicted_OVR"] = (o_base + o_mult * proj_df["Predicted_pSPAR"]).round(0).astype(int)
 
-        caps = [95.5, 104.0, 113.5]
-        for j in range(3, 9):
-            caps.append(round(113.5 * (1.05 ** (j - 2)), 1))
-        proj_df["Proj_Cap_M"] = caps[: len(proj_df)]
+        # Salary cap projections — ratings are projections for next season
+        base_cap_year = int(target["Season_Num"]) + 1
+        proj_df["Proj_Cap_M"] = [get_cap(base_cap_year + i) for i in range(len(proj_df))]
+
+        # Add actual season labels
+        proj_df["Season_Label"] = [
+            f"{(base_cap_year + i) % 100 - 1:02d}-{(base_cap_year + i) % 100:02d}"
+            for i in range(len(proj_df))
+        ]
+
         proj_df["Market_Share_Pct"] = coefs["intercept"] + coefs["slope"] * proj_df["Predicted_pSPAR"]
         proj_df["Market_Value_M"] = proj_df["Market_Share_Pct"] * proj_df["Proj_Cap_M"]
 
@@ -614,11 +635,11 @@ with tab_contract:
             # Projection table
             st.markdown("**8-Year Aging Curve Projection**")
             if model_version == "v2" and "Survival_Prob" in proj_df.columns:
-                proj_display = proj_df[["Season_Index", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]].copy()
+                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]].copy()
                 proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "TOI", "Surv %", "Proj Cap ($M)", "Market Value ($M)"]
                 fmt_proj_cv = {"pSPAR": "{:.2f}", "Surv %": "{:.1%}", "TOI": "{:.1f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
             else:
-                proj_display = proj_df[["Season_Index", "Age", "Predicted_pSPAR", "Predicted_OVR", "Proj_Cap_M", "Market_Value_M"]].copy()
+                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "Proj_Cap_M", "Market_Value_M"]].copy()
                 proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "Proj Cap ($M)", "Market Value ($M)"]
                 fmt_proj_cv = {"pSPAR": "{:.2f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
             st.dataframe(proj_display.style.format(fmt_proj_cv, na_rep="—"), use_container_width=True, hide_index=True)
@@ -655,7 +676,7 @@ with tab_contract:
             st.line_chart(chart_df)
 
             # Year-by-year breakdown
-            breakdown = future[["Season_Index", "Age", "Predicted_OVR", "Market_Value_M", "Surplus"]].copy()
+            breakdown = future[["Season_Label", "Age", "Predicted_OVR", "Market_Value_M", "Surplus"]].copy()
             breakdown.columns = ["Year", "Age", "Proj OVR", "Market Value ($M)", "Surplus ($M)"]
             fmt_bd = {"Market Value ($M)": "${:.2f}M", "Surplus ($M)": "${:.2f}M"}
             st.dataframe(breakdown.style.format(fmt_bd), use_container_width=True, hide_index=True)
