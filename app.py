@@ -693,18 +693,22 @@ with tab_contract:
             labels=["07-13", "14-19", "20-26"],
         )
 
-        era_curve = (
+        era_agg = (
             era_df.groupby(["Era", "Age"])["pSPAR"]
-            .mean()
+            .agg(["mean", "count"])
             .reset_index()
         )
+        # Require at least 20 player-seasons per age/era bucket for reliability
+        era_curve = era_agg[era_agg["count"] >= 20].copy()
+        era_curve.rename(columns={"mean": "pSPAR"}, inplace=True)
 
         if not era_curve.empty:
             chart_data = era_curve.pivot(index="Age", columns="Era", values="pSPAR")
             st.line_chart(chart_data)
 
-            # Find peak age per era
-            peaks = era_curve.loc[era_curve.groupby("Era")["pSPAR"].idxmax()][["Era", "Age", "pSPAR"]]
+            # Find peak age per era (ages 21+ to avoid survivorship bias in teens)
+            peak_data = era_curve[era_curve["Age"] >= 21]
+            peaks = peak_data.loc[peak_data.groupby("Era")["pSPAR"].idxmax()][["Era", "Age", "pSPAR"]]
             peaks.columns = ["Era", "Peak Age", "Peak pSPAR"]
             peaks["Peak pSPAR"] = peaks["Peak pSPAR"].round(2)
             st.dataframe(peaks, use_container_width=True, hide_index=True)
