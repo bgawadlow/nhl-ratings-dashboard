@@ -962,22 +962,24 @@ with tab_player:
             )
             st.altair_chart(ovr_chart, use_container_width=True)
 
-        # ── SPAR breakdown (latest season) ──
+        # ── SPAR breakdown ──
         player_spar = spar[spar["Player"] == selected_player].sort_values(
             "Season", ascending=False
         )
         if not player_spar.empty:
-            latest_sp = player_spar.iloc[0]
-            st.markdown(f"**SPAR Breakdown** ({latest_sp['Season']})")
+            spar_seasons = player_spar["Season"].tolist()
+            spar_sel = st.selectbox("Season", spar_seasons, index=0, key="lookup_spar_season")
+            sel_sp = player_spar[player_spar["Season"] == spar_sel].iloc[0]
+            st.markdown(f"**SPAR Breakdown** ({spar_sel})")
             spar_components = pd.DataFrame({
                 "Component": ["EVO", "EVD", "PPO", "SHD", "Draw", "Take"],
                 "SPAR": [
-                    latest_sp.get("pEVO_SPAR", 0),
-                    latest_sp.get("pEVD_SPAR", 0),
-                    latest_sp.get("pPPO_SPAR", 0),
-                    latest_sp.get("pSHD_SPAR", 0),
-                    latest_sp.get("pDRAW_SPAR", 0),
-                    latest_sp.get("pTAKE_SPAR", 0),
+                    sel_sp.get("pEVO_SPAR", 0),
+                    sel_sp.get("pEVD_SPAR", 0),
+                    sel_sp.get("pPPO_SPAR", 0),
+                    sel_sp.get("pSHD_SPAR", 0),
+                    sel_sp.get("pDRAW_SPAR", 0),
+                    sel_sp.get("pTAKE_SPAR", 0),
                 ],
             })
             import altair as alt
@@ -992,7 +994,7 @@ with tab_player:
                 .properties(height=250)
             )
             st.altair_chart(spar_bar, use_container_width=True)
-            st.metric("Total pSPAR", f"{latest_sp.get('pSPAR', 0):.2f}")
+            st.metric("Total pSPAR", f"{sel_sp.get('pSPAR', 0):.2f}")
 
         # ── Skating ──
         player_skating = skating[skating["Player"] == selected_player]
