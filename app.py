@@ -672,8 +672,9 @@ with tab_contract:
     st.markdown("---")
     with st.expander("Aging Curves by Era (diagnostic)", expanded=False):
         st.caption(
-            "Average pSPAR by age, split by era. Tests whether peak performance "
-            "age is shifting later in recent years."
+            "Year-over-year pSPAR delta by age, split by era. Uses each player as "
+            "their own control to isolate the aging effect (avoids survivorship bias). "
+            "Peak age = where cumulative curve is maximized."
         )
         era_pos = st.radio("Position", ["F", "D"], horizontal=True, key="era_pos")
         era_min_toi = st.slider("Min TOI/GP", 0.0, 15.0, 8.0, 0.5, key="era_min_toi",
@@ -682,36 +683,68 @@ with tab_contract:
         era_df = df_scaled[
             (df_scaled["Position"] == era_pos)
             & (df_scaled["predict_all_toi"] >= era_min_toi)
-            & (df_scaled["Age"] >= 18)
+            & (df_scaled["Age"] >= 19)
             & (df_scaled["Age"] <= 40)
         ].copy()
 
-        # Split into eras
-        era_df["Era"] = pd.cut(
-            era_df["Season_Num"],
+        # Compute same-player year-over-year delta
+        era_df = era_df.sort_values(["Player", "Season_Num"])
+        era_df["prev_pSPAR"] = era_df.groupby("Player")["pSPAR"].shift(1)
+        era_df["prev_Age"] = era_df.groupby("Player")["Age"].shift(1)
+        era_df["prev_Season"] = era_df.groupby("Player")["Season_Num"].shift(1)
+
+        # Only keep consecutive-season transitions (age +1, season +1)
+        delta_df = era_df[
+            (era_df["Age"] == era_df["prev_Age"] + 1)
+            & (era_df["Season_Num"] == era_df["prev_Season"] + 1)
+        ].copy()
+        delta_df["delta_pSPAR"] = delta_df["pSPAR"] - delta_df["prev_pSPAR"]
+
+        # Era is assigned by the destination season
+        delta_df["Era"] = pd.cut(
+            delta_df["Season_Num"],
             bins=[2006, 2013, 2019, 2030],
             labels=["07-13", "14-19", "20-26"],
         )
 
-        era_agg = (
-            era_df.groupby(["Era", "Age"])["pSPAR"]
+        # Average delta by age transition and era (min 15 observations)
+        delta_agg = (
+            delta_df.groupby(["Era", "Age"])["delta_pSPAR"]
             .agg(["mean", "count"])
             .reset_index()
         )
-        # Require at least 20 player-seasons per age/era bucket for reliability
-        era_curve = era_agg[era_agg["count"] >= 20].copy()
-        era_curve.rename(columns={"mean": "pSPAR"}, inplace=True)
+        delta_curve = delta_agg[delta_agg["count"] >= 15].copy()
+        delta_curve.rename(columns={"mean": "Avg Delta"}, inplace=True)
 
-        if not era_curve.empty:
-            chart_data = era_curve.pivot(index="Age", columns="Era", values="pSPAR")
-            st.line_chart(chart_data)
+        if not delta_curve.empty:
+            # Plot average delta by age
+            st.markdown("**Average Year-over-Year pSPAR Change by Age**")
+            delta_chart = delta_curve.pivot(index="Age", columns="Era", values="Avg Delta")
+            st.line_chart(delta_chart)
 
-            # Find peak age per era (ages 21+ to avoid survivorship bias in teens)
-            peak_data = era_curve[era_curve["Age"] >= 21]
-            peaks = peak_data.loc[peak_data.groupby("Era")["pSPAR"].idxmax()][["Era", "Age", "pSPAR"]]
-            peaks.columns = ["Era", "Peak Age", "Peak pSPAR"]
-            peaks["Peak pSPAR"] = peaks["Peak pSPAR"].round(2)
+            # Build cumulative curve to find peak age
+            st.markdown("**Cumulative Aging Curve (indexed to age 21)**")
+            cumul_rows = []
+            for era in delta_curve["Era"].unique():
+                era_data = delta_curve[delta_curve["Era"] == era].sort_values("Age")
+                cumul = 0.0
+                for _, row in era_data.iterrows():
+                    cumul += row["Avg Delta"]
+                    cumul_rows.append({"Era": era, "Age": int(row["Age"]), "Cumulative": round(cumul, 3)})
+            cumul_df = pd.DataFrame(cumul_rows)
+            cumul_chart = cumul_df.pivot(index="Age", columns="Era", values="Cumulative")
+            st.line_chart(cumul_chart)
+
+            # Peak age = where cumulative curve is maximized
+            peaks = cumul_df.loc[cumul_df.groupby("Era")["Cumulative"].idxmax()][["Era", "Age", "Cumulative"]]
+            peaks.columns = ["Era", "Peak Age", "Cumul. Delta at Peak"]
+            peaks["Cumul. Delta at Peak"] = peaks["Cumul. Delta at Peak"].round(2)
             st.dataframe(peaks, use_container_width=True, hide_index=True)
+
+            # Show sample sizes
+            with st.expander("Sample sizes by age/era"):
+                size_tbl = delta_agg.pivot(index="Age", columns="Era", values="count").fillna(0).astype(int)
+                st.dataframe(size_tbl, use_container_width=True)
         else:
             st.info("Not enough data for the selected filters.")
 
