@@ -322,6 +322,67 @@ with tab_toi:
             - spar_curr["predict_sh_toi"].fillna(0)
         )
 
+        # ── Compute role-average TOI benchmarks by position ──
+        @st.cache_data
+        def _compute_role_benchmarks(_df):
+            """Rank players within each team by EV/PP/SH TOI and compute role averages."""
+            benchmarks = {}
+            for pos in ["F", "D"]:
+                pos_df = _df[_df["Position"] == pos].copy()
+                if pos == "F":
+                    ev_sizes = [3, 3, 3, 3]
+                    ev_labels = ["1st Line", "2nd Line", "3rd Line", "4th Line"]
+                    st_sizes = [3, 3]
+                    st_labels_pp = ["PP1", "PP2", "Other"]
+                    st_labels_sh = ["SH1", "SH2", "Other"]
+                else:
+                    ev_sizes = [2, 2, 2]
+                    ev_labels = ["1st Pair", "2nd Pair", "3rd Pair"]
+                    st_sizes = [2, 2]
+                    st_labels_pp = ["PP1", "PP2", "Other"]
+                    st_labels_sh = ["SH1", "SH2", "Other"]
+
+                # EV roles
+                pos_df["ev_rank"] = pos_df.groupby("Team")["EV_TOI"].rank(ascending=False, method="first")
+                ev_avg = {}
+                cutoff = 0
+                for i, (size, label) in enumerate(zip(ev_sizes, ev_labels)):
+                    low, high = cutoff + 1, cutoff + size
+                    role_data = pos_df[(pos_df["ev_rank"] >= low) & (pos_df["ev_rank"] <= high)]["EV_TOI"]
+                    ev_avg[label] = round(role_data.mean(), 1) if len(role_data) > 0 else 0.0
+                    cutoff = high
+
+                # PP roles
+                pp_players = pos_df[pos_df["predict_pp_toi"].fillna(0) > 0.5].copy()
+                pp_players["pp_rank"] = pp_players.groupby("Team")["predict_pp_toi"].rank(ascending=False, method="first")
+                pp_avg = {}
+                cutoff = 0
+                for size, label in zip(st_sizes, st_labels_pp[:-1]):
+                    low, high = cutoff + 1, cutoff + size
+                    role_data = pp_players[(pp_players["pp_rank"] >= low) & (pp_players["pp_rank"] <= high)]["predict_pp_toi"]
+                    pp_avg[label] = round(role_data.mean(), 1) if len(role_data) > 0 else 0.0
+                    cutoff = high
+                other_pp = pp_players[pp_players["pp_rank"] > cutoff]["predict_pp_toi"]
+                pp_avg["Other"] = round(other_pp.mean(), 1) if len(other_pp) > 0 else 0.0
+
+                # SH roles
+                sh_players = pos_df[pos_df["predict_sh_toi"].fillna(0) > 0.3].copy()
+                sh_players["sh_rank"] = sh_players.groupby("Team")["predict_sh_toi"].rank(ascending=False, method="first")
+                sh_avg = {}
+                cutoff = 0
+                for size, label in zip(st_sizes, st_labels_sh[:-1]):
+                    low, high = cutoff + 1, cutoff + size
+                    role_data = sh_players[(sh_players["sh_rank"] >= low) & (sh_players["sh_rank"] <= high)]["predict_sh_toi"]
+                    sh_avg[label] = round(role_data.mean(), 1) if len(role_data) > 0 else 0.0
+                    cutoff = high
+                other_sh = sh_players[sh_players["sh_rank"] > cutoff]["predict_sh_toi"]
+                sh_avg["Other"] = round(other_sh.mean(), 1) if len(other_sh) > 0 else 0.0
+
+                benchmarks[pos] = {"EV": ev_avg, "PP": pp_avg, "SH": sh_avg}
+            return benchmarks
+
+        role_benchmarks = _compute_role_benchmarks(spar_curr)
+
         toi_players = sorted(spar_curr["Player"].unique())
         toi_player = st.selectbox(
             "Select Player", toi_players, index=None,
@@ -355,6 +416,9 @@ with tab_toi:
             # Show current state
             st.markdown(f"**{toi_player}** — {pos} — Current TOI/GP: {old_all:.1f} min")
 
+            # Role benchmarks for this position
+            rb = role_benchmarks.get(pos, {})
+
             st.markdown("---")
             st.markdown("**Adjust Ice Time (minutes per game)**")
             tc1, tc2, tc3 = st.columns(3)
@@ -362,14 +426,20 @@ with tab_toi:
                 new_ev = st.slider(
                     "EV TOI/GP", 0.0, 25.0, round(old_ev, 1), 0.5, key="toi_ev",
                 )
+                ev_labels = " · ".join(f"{k}: {v}" for k, v in rb.get("EV", {}).items())
+                st.caption(f"Avg: {ev_labels}")
             with tc2:
                 new_pp = st.slider(
                     "PP TOI/GP", 0.0, 8.0, round(old_pp, 1), 0.25, key="toi_pp",
                 )
+                pp_labels = " · ".join(f"{k}: {v}" for k, v in rb.get("PP", {}).items())
+                st.caption(f"Avg: {pp_labels}")
             with tc3:
                 new_sh = st.slider(
                     "SH TOI/GP", 0.0, 6.0, round(old_sh, 1), 0.25, key="toi_sh",
                 )
+                sh_labels = " · ".join(f"{k}: {v}" for k, v in rb.get("SH", {}).items())
+                st.caption(f"Avg: {sh_labels}")
             new_all = new_ev + new_pp + new_sh
 
             # Recalculate SPAR components with new TOI
