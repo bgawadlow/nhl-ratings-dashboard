@@ -30,8 +30,19 @@ PERF_VARS = [
     "Hits82", "Blk82", "PTS82", "G82", "EV_PTS82", "EV_G82",
 ]
 
+SPAR_COMPONENTS = [
+    "pEVO_SPAR", "pEVD_SPAR", "pPPO_SPAR", "pSHD_SPAR",
+    "pTAKE_SPAR", "pDRAW_SPAR",
+]
+
 # Known salary caps by season start year
 KNOWN_CAPS = {2026: 95.5, 2027: 104.0, 2028: 113.5}
+
+# Fixed value for all undrafted players (instead of per-year max_pick + 1)
+UNDRAFTED_PICK_VALUE = 250
+
+# League minimum salary ($M)
+LEAGUE_MIN_SALARY = 0.775
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -59,20 +70,30 @@ def compute_ovr(pos, spar_val):
 # ── Dataset Builder ─────────────────────────────────────────────────────────
 
 def build_scaled_dataset(spar_df, draft_df):
-    """Merge SPAR + draft info, compute deltas, per-60 rates & z-scores."""
+    """Merge SPAR + draft info, compute deltas, slopes, per-60 rates & z-scores."""
     df = spar_df.copy()
 
-    draft_map = draft_df.drop_duplicates(subset="Player_Key", keep="first")
-    df = df.merge(
-        draft_map[["Player_Key", "Draft Yr", "Draft Ov"]],
-        left_on="Player", right_on="Player_Key", how="left",
-    ).drop(columns=["Player_Key"])
+    # ── Merge draft info ──
+    if "Player_Key" in draft_df.columns:
+        draft_map = draft_df.drop_duplicates(subset="Player_Key", keep="first")
+        df = df.merge(
+            draft_map[["Player_Key", "Draft Yr", "Draft Ov"]],
+            left_on="Player", right_on="Player_Key", how="left",
+        ).drop(columns=["Player_Key"])
+    else:
+        draft_map = draft_df.drop_duplicates(subset="Player", keep="first")
+        df = df.merge(
+            draft_map[["Player", "Draft Yr", "Draft Ov"]],
+            on="Player", how="left",
+        )
 
-    max_pick = df["Draft Yr"].map(DRAFT_MAX_LOOKUP)
+    # ── Undrafted handling (improvement 1) ──
+    # All undrafted players get a single fixed value instead of per-year max_pick+1
+    df["is_undrafted"] = df["Draft Ov"].isna().astype(float)
     df["Draft_Ov_Clean"] = np.where(
         df["Draft Ov"].notna(),
         df["Draft Ov"],
-        np.where(max_pick.notna(), max_pick + 1, 225),
+        UNDRAFTED_PICK_VALUE,
     )
     df["Draft_Ov_Log"] = np.log(df["Draft_Ov_Clean"].astype(float))
 
@@ -82,6 +103,7 @@ def build_scaled_dataset(spar_df, draft_df):
         if col in df.columns:
             df[col] = df[col].fillna(0)
 
+    # ── Per-60 rates (kept for reference / v1 compatibility) ──
     df["ev_toi"] = (
         df["predict_all_toi"]
         - df["predict_pp_toi"].fillna(0)
@@ -94,13 +116,35 @@ def build_scaled_dataset(spar_df, draft_df):
     df["rate_TAKE"] = np.where(df["predict_all_toi"] > 0, df["pTAKE_SPAR"] * 60 / (df["predict_all_toi"] * 82), 0)
     df["rate_DRAW"] = np.where(df["predict_all_toi"] > 0, df["pDRAW_SPAR"] * 60 / (df["predict_all_toi"] * 82), 0)
 
+    # ── Deltas (improvement 3a): NaN for first-season instead of 0 ──
     df = df.sort_values(["Player", "Season_Num"])
     for var in PERF_VARS:
         if var in df.columns:
-            df[f"d_{var}"] = df.groupby("Player")[var].diff().fillna(0)
+            df[f"d_{var}"] = df.groupby("Player")[var].diff()  # NaN for first season
 
+    # ── 2-year slope / trend (improvement 3b) ──
+    # Linear slope over last 2-3 seasons per player per variable
+    for var in PERF_VARS:
+        if var in df.columns:
+            def _slope(s):
+                """Vectorized 2-year slope using shift."""
+                prev1 = s.shift(1)
+                prev2 = s.shift(2)
+                # 3-point slope: (val - val_2ago) / 2, fallback to 2-point delta
+                slope3 = (s - prev2) / 2.0
+                slope2 = s - prev1
+                return slope3.where(prev2.notna(), slope2.where(prev1.notna(), np.nan))
+            df[f"slope2_{var}"] = df.groupby("Player")[var].transform(_slope)
+
+    # ── Build variable lists for z-scoring ──
     delta_vars = [f"d_{v}" for v in PERF_VARS if v in df.columns]
-    all_vars = [v for v in PERF_VARS if v in df.columns] + delta_vars + ["Draft_Ov_Log"]
+    slope_vars = [f"slope2_{v}" for v in PERF_VARS if v in df.columns]
+    all_vars = (
+        [v for v in PERF_VARS if v in df.columns]
+        + delta_vars
+        + slope_vars
+        + ["Draft_Ov_Log", "is_undrafted"]
+    )
 
     def safe_scale(s):
         if s.std() == 0 or s.count() < 2:
@@ -154,6 +198,84 @@ def get_survival_prob(pos, age, spar_val, surv_tbl):
         & (surv_tbl["spar_bucket"] == bucket)
     ]
     return float(match["rate"].iloc[0]) if not match.empty else 0.7
+
+
+# ── Logistic Survival Model (improvement 5) ──────────────────────────────
+
+def _sigmoid(z):
+    """Numerically stable sigmoid."""
+    return np.where(z >= 0, 1 / (1 + np.exp(-z)), np.exp(z) / (1 + np.exp(z)))
+
+
+def build_survival_model(df):
+    """Fit logistic regression for P(survive next season) via hand-rolled IRLS.
+
+    Features: Age, pSPAR, Age*pSPAR interaction, is_D (position).
+    Returns dict with weights, intercept, and standardization params.
+    """
+    df = df.copy()
+    df = df.sort_values(["Player", "Age"])
+    df["has_next"] = df.groupby("Player")["Age"].shift(-1) == df["Age"] + 1
+    df["has_next"] = df["has_next"].fillna(False).astype(float)
+
+    # Drop rows with missing key columns
+    model_df = df[["Age", "pSPAR", "Position", "has_next"]].dropna().copy()
+    model_df["is_D"] = (model_df["Position"] == "D").astype(float)
+    model_df["age_spar"] = model_df["Age"] * model_df["pSPAR"]
+
+    # Standardize continuous features
+    stats = {}
+    for col in ["Age", "pSPAR", "age_spar"]:
+        mu, sd = model_df[col].mean(), model_df[col].std()
+        if sd < 1e-9:
+            sd = 1.0
+        stats[col] = (mu, sd)
+        model_df[f"{col}_z"] = (model_df[col] - mu) / sd
+
+    # Build design matrix  [age_z, spar_z, interaction_z, is_D]
+    X = model_df[["Age_z", "pSPAR_z", "age_spar_z", "is_D"]].values
+    y = model_df["has_next"].values
+    n, k = X.shape
+
+    # IRLS with L2 regularization (lambda=0.01 for numerical stability)
+    w = np.zeros(k)
+    b = 0.0
+    lam = 0.01
+
+    for _ in range(30):
+        z = X @ w + b
+        p = _sigmoid(z)
+        p = np.clip(p, 1e-7, 1 - 1e-7)
+        r = p * (1 - p)
+        grad_w = X.T @ (p - y) / n + lam * w
+        grad_b = np.mean(p - y)
+        H = (X.T * r) @ X / n + lam * np.eye(k)
+        try:
+            dw = np.linalg.solve(H, grad_w)
+        except np.linalg.LinAlgError:
+            dw = grad_w * 0.01
+        w -= dw
+        b -= 0.1 * grad_b  # smaller step for intercept
+
+    return {
+        "weights": w,
+        "intercept": b,
+        "stats": stats,  # {col: (mean, std)}
+        "features": ["Age", "pSPAR", "age_spar", "is_D"],
+    }
+
+
+def get_survival_prob_v3(pos, age, spar_val, survival_model):
+    """Predict P(survive next season) using the logistic model."""
+    stats = survival_model["stats"]
+    age_z = (age - stats["Age"][0]) / stats["Age"][1]
+    spar_z = (spar_val - stats["pSPAR"][0]) / stats["pSPAR"][1]
+    interaction_z = (age * spar_val - stats["age_spar"][0]) / stats["age_spar"][1]
+    is_d = 1.0 if pos == "D" else 0.0
+
+    x = np.array([age_z, spar_z, interaction_z, is_d])
+    z = np.dot(survival_model["weights"], x) + survival_model["intercept"]
+    return float(np.clip(_sigmoid(z), 0.01, 0.99))
 
 
 # ── v1 Projection ──────────────────────────────────────────────────────────
@@ -399,6 +521,195 @@ def get_projection_v2(target_name, target_season, dataset, survival_table,
     experienced = season_counts[season_counts > 3].index
     comps_pool = cohort[cohort["Player"].isin(experienced)]
     top_comps = comps_pool.head(10)[["Player", "Season", "Age", "pSPAR", "predict_all_toi", "base_weight"]].copy()
+    top_comps.columns = ["Player", "Season", "Age", "pSPAR", "TOI", "Similarity"]
+
+    return proj_df, contract_table, top_comps
+
+
+# ── v3 Projection (all 7 improvements) ───────────────────────────────────
+
+def get_projection_v3(target_name, target_season, dataset, survival_model,
+                      decay_rate=0.85, era_decay=0.92):
+    """v3: direct component aging, Gaussian kernel, logistic survival,
+    improved undrafted/delta/slope features, era-anchored decay, market floor."""
+    target = dataset[
+        (dataset["Player"] == target_name) & (dataset["Season"] == target_season)
+    ]
+    if target.empty:
+        return None, None, None
+    target = target.iloc[0]
+    t_age = int(target["Age"])
+    t_pos = target["Position"]
+    t_season_num = int(target["Season_Num"])
+
+    # ── Build similarity feature list (improvements 1, 3) ──
+    delta_vars_v = [f"d_{v}" for v in PERF_VARS if f"d_{v}" in dataset.columns]
+    slope_vars_v = [f"slope2_{v}" for v in PERF_VARS if f"slope2_{v}" in dataset.columns]
+    active_vars = (
+        [v for v in PERF_VARS if v in dataset.columns]
+        + delta_vars_v
+        + slope_vars_v
+        + ["is_undrafted"]
+        + (["Draft_Ov_Log"] if t_age <= 26 else [])
+    )
+    z_vars = [f"z_{v}" for v in active_vars if f"z_{v}" in dataset.columns]
+
+    # ── Age-dependent weighting for trajectory features (improvement 3c) ──
+    # Deltas & slopes matter more for younger players
+    delta_weight = max(1.0, 1.5 - 0.05 * (t_age - 20))  # 1.5x at 20, 1.0x at 30+
+    delta_slope_z = set(
+        [f"z_d_{v}" for v in PERF_VARS] + [f"z_slope2_{v}" for v in PERF_VARS]
+    )
+    weight_mask = np.array([delta_weight if zv in delta_slope_z else 1.0 for zv in z_vars])
+
+    target_stats = target[z_vars].values.astype(float) * weight_mask
+
+    # ── Build cohort (same position, same age, different player) ──
+    cohort = dataset[
+        (dataset["Position"] == t_pos)
+        & (dataset["Age"] == t_age)
+        & (dataset["Player"] != target_name)
+    ].copy()
+    if cohort.empty:
+        return None, None, None
+
+    cohort_stats = cohort[z_vars].values.astype(float) * weight_mask
+
+    # ── Gaussian kernel similarity (improvement 4) ──
+    dists = np.sqrt(np.nansum((cohort_stats - target_stats) ** 2, axis=1))
+    sigma = np.median(dists)
+    if sigma < 1e-6:
+        sigma = 1.0
+    cohort["base_weight"] = np.exp(-dists ** 2 / (2 * sigma ** 2))
+    cohort = cohort.sort_values("base_weight", ascending=False)
+
+    # ── Project each SPAR component directly (improvement 2) ──
+    curr_components = {comp: float(target[comp]) for comp in SPAR_COMPONENTS}
+
+    # Also track TOI as informational (not used to reconstruct SPAR)
+    curr_toi = {
+        "ev": float(target["ev_toi"]),
+        "pp": float(target.get("predict_pp_toi", 0) or 0),
+        "sh": float(target.get("predict_sh_toi", 0) or 0),
+    }
+
+    projections_list = []
+    for i in range(1, 9):
+        next_age = t_age + i
+
+        comp_players = cohort["Player"].values
+        delta_pool = dataset[dataset["Player"].isin(comp_players)]
+        pairs = delta_pool[delta_pool["Age"].isin([next_age - 1, next_age])]
+        pairs = pairs.groupby("Player").filter(lambda g: len(g) == 2)
+
+        if not pairs.empty:
+            pairs_sorted = pairs.sort_values(["Player", "Age"])
+            prev = pairs_sorted.groupby("Player").nth(0).reset_index()
+            curr = pairs_sorted.groupby("Player").nth(1).reset_index()
+
+            yoy = pd.DataFrame({"Player": prev["Player"]})
+
+            # Component-level YoY deltas
+            for comp in SPAR_COMPONENTS:
+                yoy[f"d_{comp}"] = curr[comp].values - prev[comp].values
+
+            # TOI deltas (informational)
+            yoy["d_ev_toi"] = curr["ev_toi"].values - prev["ev_toi"].values
+            yoy["d_pp_toi"] = (
+                curr["predict_pp_toi"].fillna(0).values
+                - prev["predict_pp_toi"].fillna(0).values
+            )
+            yoy["d_sh_toi"] = (
+                curr["predict_sh_toi"].fillna(0).values
+                - prev["predict_sh_toi"].fillna(0).values
+            )
+
+            yoy = yoy.merge(cohort[["Player", "base_weight"]], on="Player")
+
+            # Era decay anchored to target season (improvement 6)
+            yoy["era_weight"] = era_decay ** (t_season_num - prev["Season_Num"].values)
+            yoy["weight"] = yoy["base_weight"] * (decay_rate ** i) * yoy["era_weight"]
+
+            w = yoy["weight"].values
+            avg_d = {
+                col: np.average(yoy[col], weights=w)
+                for col in yoy.columns if col.startswith("d_")
+            }
+        else:
+            # Fallback when no comp transitions exist for this age
+            avg_d = {f"d_{comp}": -0.05 for comp in SPAR_COMPONENTS}
+            avg_d["d_ev_toi"] = -0.3
+            avg_d["d_pp_toi"] = -0.05
+            avg_d["d_sh_toi"] = -0.02
+
+        # Apply component deltas directly
+        for comp in SPAR_COMPONENTS:
+            curr_components[comp] += avg_d.get(f"d_{comp}", 0)
+
+        raw_spar = sum(curr_components.values())
+
+        # Update TOI (informational only — does NOT feed into SPAR)
+        curr_toi["ev"] = max(curr_toi["ev"] + avg_d.get("d_ev_toi", 0), 0)
+        curr_toi["pp"] = max(curr_toi["pp"] + avg_d.get("d_pp_toi", 0), 0)
+        curr_toi["sh"] = max(curr_toi["sh"] + avg_d.get("d_sh_toi", 0), 0)
+        all_toi = curr_toi["ev"] + curr_toi["pp"] + curr_toi["sh"]
+
+        # Logistic survival probability (improvement 5)
+        surv_prob = get_survival_prob_v3(t_pos, next_age - 1, raw_spar, survival_model)
+
+        projections_list.append({
+            "Age": next_age,
+            "Predicted_pSPAR": raw_spar,
+            "Survival_Prob": surv_prob,
+            "TOI": round(all_toi, 1),
+            "Season_Index": f"+{i}",
+        })
+
+    # ── Build output tables ──
+    o_base, o_mult = OVR_PARAMS[t_pos]
+    coefs = MARKET_COEFS[t_pos]
+
+    proj_df = pd.DataFrame(projections_list)
+    proj_df = pd.concat([
+        pd.DataFrame([{
+            "Age": t_age,
+            "Predicted_pSPAR": float(target["pSPAR"]),
+            "Survival_Prob": 1.0,
+            "TOI": round(float(target["predict_all_toi"]), 1),
+            "Season_Index": "Current",
+        }]),
+        proj_df,
+    ]).reset_index(drop=True)
+
+    proj_df["Predicted_OVR"] = (o_base + o_mult * proj_df["Predicted_pSPAR"]).round(0).astype(int)
+
+    base_cap_year = int(target["Season_Num"]) + 1
+    proj_df["Proj_Cap_M"] = [get_cap(base_cap_year + i) for i in range(len(proj_df))]
+    proj_df["Season_Label"] = [
+        f"{(base_cap_year + i) % 100 - 1:02d}-{(base_cap_year + i) % 100:02d}"
+        for i in range(len(proj_df))
+    ]
+
+    proj_df["Market_Share_Pct"] = coefs["intercept"] + coefs["slope"] * proj_df["Predicted_pSPAR"]
+    proj_df["Market_Value_M"] = (proj_df["Market_Share_Pct"] * proj_df["Proj_Cap_M"]).clip(lower=LEAGUE_MIN_SALARY)
+
+    # Survival-adjusted market value for contract table
+    proj_df["Adj_Market_Value_M"] = proj_df["Market_Value_M"] * proj_df["Survival_Prob"]
+
+    future = proj_df[proj_df["Season_Index"] != "Current"].reset_index(drop=True)
+    contract_table = pd.DataFrame({
+        "Term": range(1, 9),
+        "Total_Value_M": future["Adj_Market_Value_M"].cumsum().round(2),
+    })
+    contract_table["AAV_M"] = (contract_table["Total_Value_M"] / contract_table["Term"]).round(3)
+
+    # ── Top comps ──
+    season_counts = dataset.groupby("Player")["Season"].nunique()
+    experienced = season_counts[season_counts > 3].index
+    comps_pool = cohort[cohort["Player"].isin(experienced)]
+    top_comps = comps_pool.head(10)[
+        ["Player", "Season", "Age", "pSPAR", "predict_all_toi", "base_weight"]
+    ].copy()
     top_comps.columns = ["Player", "Season", "Age", "pSPAR", "TOI", "Similarity"]
 
     return proj_df, contract_table, top_comps

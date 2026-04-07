@@ -15,8 +15,9 @@ from pathlib import Path
 try:
     from model import (
         MARKET_COEFS, OVR_PARAMS, PERF_VARS, DRAFT_MAX_LOOKUP, KNOWN_CAPS,
-        build_scaled_dataset, build_survival_table, get_survival_prob,
-        get_projection, get_projection_v2,
+        build_scaled_dataset, build_survival_table, build_survival_model,
+        get_survival_prob, get_survival_prob_v3,
+        get_projection, get_projection_v3,
         get_cap, ovr_f, ovr_d, compute_ovr,
     )
     MODEL_AVAILABLE = True
@@ -222,11 +223,11 @@ with tab_contract:
             return build_scaled_dataset(_spar_df, _draft_df)
 
         @st.cache_data
-        def _build_survival_table(_df):
-            return build_survival_table(_df)
+        def _build_survival_model(_df):
+            return build_survival_model(_df)
 
         df_scaled = _build_scaled_dataset(spar, draft_info)
-        survival_table = _build_survival_table(df_scaled)
+        survival_model = _build_survival_model(df_scaled)
 
         # ── UI ──
         cv_col1, cv_col2 = st.columns([2, 1])
@@ -237,7 +238,7 @@ with tab_contract:
             cv_season = st.selectbox("Season", all_seasons, index=0, key="cv_season")
 
         if cv_player:
-            proj_df, contract_table, top_comps = get_projection(cv_player, cv_season, df_scaled)
+            proj_df, contract_table, top_comps = get_projection_v3(cv_player, cv_season, df_scaled, survival_model)
 
             if proj_df is not None:
                 # Headline
@@ -250,9 +251,9 @@ with tab_contract:
 
                 # Projection table
                 st.markdown("**8-Year Aging Curve Projection**")
-                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "Proj_Cap_M", "Market_Value_M"]].copy()
-                proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "Proj Cap ($M)", "Market Value ($M)"]
-                fmt_proj_cv = {"pSPAR": "{:.2f}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
+                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]].copy()
+                proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
+                fmt_proj_cv = {"pSPAR": "{:.2f}", "TOI": "{:.1f}", "Survival %": "{:.0%}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
                 st.dataframe(proj_display.style.format(fmt_proj_cv, na_rep="—"), use_container_width=True, hide_index=True)
 
                 # Contract term AAV table
@@ -272,7 +273,7 @@ with tab_contract:
                     user_term = st.slider("Term (Years)", 1, 8, 4, key="cv_term")
 
                 future = proj_df[proj_df["Season_Index"] != "Current"].head(user_term).copy()
-                future["Surplus"] = future["Market_Value_M"] - user_aav
+                future["Surplus"] = future["Adj_Market_Value_M"] - user_aav
                 total_surplus = future["Surplus"].sum()
 
                 if total_surplus > 0:
@@ -281,15 +282,15 @@ with tab_contract:
                     st.error(f"OVERPAY — Total deficit: **${total_surplus:.2f}M** over {user_term} years")
 
                 # Surplus chart
-                chart_df = future[["Age", "Market_Value_M"]].set_index("Age")
+                chart_df = future[["Age", "Adj_Market_Value_M"]].set_index("Age")
                 chart_df["Proposed AAV"] = user_aav
-                chart_df.columns = ["Market Value", "Proposed AAV"]
+                chart_df.columns = ["Adj. Market Value", "Proposed AAV"]
                 st.line_chart(chart_df)
 
                 # Year-by-year breakdown
-                breakdown = future[["Season_Label", "Age", "Predicted_OVR", "Market_Value_M", "Surplus"]].copy()
-                breakdown.columns = ["Year", "Age", "Proj OVR", "Market Value ($M)", "Surplus ($M)"]
-                fmt_bd = {"Market Value ($M)": "${:.2f}M", "Surplus ($M)": "${:.2f}M"}
+                breakdown = future[["Season_Label", "Age", "Predicted_OVR", "Survival_Prob", "Market_Value_M", "Adj_Market_Value_M", "Surplus"]].copy()
+                breakdown.columns = ["Year", "Age", "Proj OVR", "Survival %", "Raw Value ($M)", "Adj. Value ($M)", "Surplus ($M)"]
+                fmt_bd = {"Survival %": "{:.0%}", "Raw Value ($M)": "${:.2f}M", "Adj. Value ($M)": "${:.2f}M", "Surplus ($M)": "${:.2f}M"}
                 st.dataframe(breakdown.style.format(fmt_bd), use_container_width=True, hide_index=True)
 
                 # Top comps
