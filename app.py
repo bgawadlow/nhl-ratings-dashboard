@@ -60,7 +60,7 @@ DATA_DIR = Path(__file__).parent / "data"
 
 
 # ── Data Loading (cached) ───────────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=300)  # TODO: bump back to 3600 after confirming refresh
 def load_data():
     ratings = pd.read_csv(DATA_DIR / "ratings.csv")
     gar = pd.read_csv(DATA_DIR / "gar.csv")
