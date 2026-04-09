@@ -12,7 +12,7 @@ MARKET_COEFS = {
     "D": {"intercept": 0.0102884, "slope": 0.0144682},
 }
 
-OVR_PARAMS = {"F": (77.5, 0.875), "D": (78.25, 1.075)}
+OVR_PARAMS = {"F": (77.5, 1.5), "D": (77.5, 1.85)}
 
 DRAFT_MAX_LOOKUP = dict(zip(
     range(1981, 2026),
@@ -693,13 +693,10 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
     proj_df["Market_Share_Pct"] = coefs["intercept"] + coefs["slope"] * proj_df["Predicted_pSPAR"]
     proj_df["Market_Value_M"] = (proj_df["Market_Share_Pct"] * proj_df["Proj_Cap_M"]).clip(lower=LEAGUE_MIN_SALARY)
 
-    # Survival-adjusted market value for contract table
-    proj_df["Adj_Market_Value_M"] = proj_df["Market_Value_M"] * proj_df["Survival_Prob"]
-
     future = proj_df[proj_df["Season_Index"] != "Current"].reset_index(drop=True)
     contract_table = pd.DataFrame({
         "Term": range(1, 9),
-        "Total_Value_M": future["Adj_Market_Value_M"].cumsum().round(2),
+        "Total_Value_M": future["Market_Value_M"].cumsum().round(2),
     })
     contract_table["AAV_M"] = (contract_table["Total_Value_M"] / contract_table["Term"]).round(3)
 
