@@ -251,9 +251,9 @@ with tab_contract:
 
                 # Projection table
                 st.markdown("**8-Year Aging Curve Projection**")
-                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]].copy()
-                proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
-                fmt_proj_cv = {"pSPAR": "{:.2f}", "TOI": "{:.1f}", "Survival %": "{:.0%}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
+                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M", "Adj_Market_Value_M"]].copy()
+                proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "TOI", "Survival %", "Proj Cap ($M)", "Raw Value ($M)", "Adj. Value ($M)"]
+                fmt_proj_cv = {"pSPAR": "{:.2f}", "TOI": "{:.1f}", "Survival %": "{:.0%}", "Proj Cap ($M)": "${:.1f}M", "Raw Value ($M)": "${:.2f}M", "Adj. Value ($M)": "${:.2f}M"}
                 st.dataframe(proj_display.style.format(fmt_proj_cv, na_rep="—"), use_container_width=True, hide_index=True)
 
                 # Contract term AAV table
