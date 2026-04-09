@@ -218,11 +218,11 @@ with tab_contract:
         st.warning("Contract projection model is not available in this deployment.")
     else:
         # ── Cached wrappers around model functions ──
-        @st.cache_data
+        @st.cache_data(ttl=300)  # TODO: bump back to 3600 after confirming refresh
         def _build_scaled_dataset(_spar_df, _draft_df):
             return build_scaled_dataset(_spar_df, _draft_df)
 
-        @st.cache_data
+        @st.cache_data(ttl=300)  # TODO: bump back to 3600 after confirming refresh
         def _build_survival_model(_df):
             return build_survival_model(_df)
 
