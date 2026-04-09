@@ -8,8 +8,8 @@ import pandas as pd
 
 # ── Model Constants ─────────────────────────────────────────────────────────
 MARKET_COEFS = {
-    "F": {"intercept": 0.0118168, "slope": 0.0073865},
-    "D": {"intercept": 0.0118966, "slope": 0.0082860},
+    "F": {"intercept": 0.0110927, "slope": 0.0130726},
+    "D": {"intercept": 0.0102884, "slope": 0.0144682},
 }
 
 OVR_PARAMS = {"F": (77.5, 0.875), "D": (78.25, 1.075)}
