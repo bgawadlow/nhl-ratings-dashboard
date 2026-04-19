@@ -7,10 +7,22 @@ import numpy as np
 import pandas as pd
 
 # ── Model Constants ─────────────────────────────────────────────────────────
-MARKET_COEFS = {
-    "F": {"intercept": 0.0110927, "slope": 0.0130726},
-    "D": {"intercept": 0.0102884, "slope": 0.0144682},
+# Contract model: Market Value = Replacement + ($/SPAR × pSPAR)
+# Calibrated to the current salary cap (BASE_CAP_M); future seasons scale by cap growth.
+CONTRACT_MODEL = {
+    "F": {
+        "replacement_m":       1.20,       # $M replacement-level value
+        "dollars_per_spar_m":  1.267681,   # $M per unit of pSPAR
+        "dollars_per_win_m":   2.852283,   # $M per win (reference)
+    },
+    "D": {
+        "replacement_m":       1.02,
+        "dollars_per_spar_m":  1.419538,
+        "dollars_per_win_m":   3.193962,
+    },
 }
+# Salary cap used to calibrate the contract model ($M). Future seasons scale by Proj_Cap_M / BASE_CAP_M.
+BASE_CAP_M = 95.5
 
 OVR_PARAMS = {"F": (77.5, 1.5), "D": (77.5, 1.85)}
 
@@ -338,7 +350,7 @@ def get_projection(target_name, target_season, dataset):
         })
 
     o_base, o_mult = OVR_PARAMS[t_pos]
-    coefs = MARKET_COEFS[t_pos]
+    contract = CONTRACT_MODEL[t_pos]
 
     proj_df = pd.DataFrame(projections_list)
     proj_df = pd.concat([
@@ -360,8 +372,8 @@ def get_projection(target_name, target_season, dataset):
         for i in range(len(proj_df))
     ]
 
-    proj_df["Market_Share_Pct"] = coefs["intercept"] + coefs["slope"] * proj_df["Predicted_pSPAR"]
-    proj_df["Market_Value_M"] = proj_df["Market_Share_Pct"] * proj_df["Proj_Cap_M"]
+    base_value = contract["replacement_m"] + contract["dollars_per_spar_m"] * proj_df["Predicted_pSPAR"]
+    proj_df["Market_Value_M"] = base_value * (proj_df["Proj_Cap_M"] / BASE_CAP_M)
 
     future = proj_df[proj_df["Season_Index"] != "Current"].reset_index(drop=True)
     contract_table = pd.DataFrame({
@@ -483,7 +495,7 @@ def get_projection_v2(target_name, target_season, dataset, survival_table,
         })
 
     o_base, o_mult = OVR_PARAMS[t_pos]
-    coefs = MARKET_COEFS[t_pos]
+    contract = CONTRACT_MODEL[t_pos]
 
     proj_df = pd.DataFrame(projections_list)
     proj_df = pd.concat([
@@ -507,8 +519,8 @@ def get_projection_v2(target_name, target_season, dataset, survival_table,
         for i in range(len(proj_df))
     ]
 
-    proj_df["Market_Share_Pct"] = coefs["intercept"] + coefs["slope"] * proj_df["Predicted_pSPAR"]
-    proj_df["Market_Value_M"] = proj_df["Market_Share_Pct"] * proj_df["Proj_Cap_M"]
+    base_value = contract["replacement_m"] + contract["dollars_per_spar_m"] * proj_df["Predicted_pSPAR"]
+    proj_df["Market_Value_M"] = base_value * (proj_df["Proj_Cap_M"] / BASE_CAP_M)
 
     future = proj_df[proj_df["Season_Index"] != "Current"].reset_index(drop=True)
     contract_table = pd.DataFrame({
@@ -667,7 +679,7 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
 
     # ── Build output tables ──
     o_base, o_mult = OVR_PARAMS[t_pos]
-    coefs = MARKET_COEFS[t_pos]
+    contract = CONTRACT_MODEL[t_pos]
 
     proj_df = pd.DataFrame(projections_list)
     proj_df = pd.concat([
@@ -690,8 +702,8 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
         for i in range(len(proj_df))
     ]
 
-    proj_df["Market_Share_Pct"] = coefs["intercept"] + coefs["slope"] * proj_df["Predicted_pSPAR"]
-    proj_df["Market_Value_M"] = (proj_df["Market_Share_Pct"] * proj_df["Proj_Cap_M"]).clip(lower=LEAGUE_MIN_SALARY)
+    base_value = contract["replacement_m"] + contract["dollars_per_spar_m"] * proj_df["Predicted_pSPAR"]
+    proj_df["Market_Value_M"] = (base_value * (proj_df["Proj_Cap_M"] / BASE_CAP_M)).clip(lower=LEAGUE_MIN_SALARY)
 
     future = proj_df[proj_df["Season_Index"] != "Current"].reset_index(drop=True)
     contract_table = pd.DataFrame({
