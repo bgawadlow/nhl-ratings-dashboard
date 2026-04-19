@@ -670,7 +670,9 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
         surv_prob = get_survival_prob_v3(t_pos, next_age - 1, raw_spar, survival_model)
 
         projections_list.append({
-            "Age": next_age,
+            # pSPAR is a projection for the *next* season, so the displayed age
+            # is incremented to match the season being projected.
+            "Age": next_age + 1,
             "Predicted_pSPAR": raw_spar,
             "Survival_Prob": surv_prob,
             "TOI": round(all_toi, 1),
@@ -684,7 +686,8 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
     proj_df = pd.DataFrame(projections_list)
     proj_df = pd.concat([
         pd.DataFrame([{
-            "Age": t_age,
+            # target["pSPAR"] is next-season's projection → bump age to match.
+            "Age": t_age + 1,
             "Predicted_pSPAR": float(target["pSPAR"]),
             "Survival_Prob": 1.0,
             "TOI": round(float(target["predict_all_toi"]), 1),
