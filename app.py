@@ -24,6 +24,7 @@ try:
 except ImportError:
     MODEL_AVAILABLE = False
 
+# Build tag: skill-weighted comps v1 (2026-04-19)
 # ── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="NHL 26 Ratings",
@@ -57,6 +58,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 DATA_DIR = Path(__file__).parent / "data"
+
+# Clear all cached data on every fresh deploy so new model logic takes effect
+# immediately without waiting for TTL expiry. No-op after the first run.
+if "cache_cleared_v1" not in st.session_state:
+    st.cache_data.clear()
+    st.session_state["cache_cleared_v1"] = True
 
 
 # ── Data Loading (cached) ───────────────────────────────────────────────────
