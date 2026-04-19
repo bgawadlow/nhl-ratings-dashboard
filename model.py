@@ -8,17 +8,20 @@ import pandas as pd
 
 # ── Model Constants ─────────────────────────────────────────────────────────
 # Contract model: Market Value = Replacement + ($/SPAR × pSPAR)
+# Replacement anchored to league minimum ($0.775M); slope re-fit on 5,638 obs
+# of historical contract data (see Contract Model Eval.R). Removes ~$0.40M
+# of bottom-of-roster overvaluation vs unconstrained regression.
 # Calibrated to the current salary cap (BASE_CAP_M); future seasons scale by cap growth.
 CONTRACT_MODEL = {
     "F": {
-        "replacement_m":       1.20,       # $M replacement-level value
-        "dollars_per_spar_m":  1.267681,   # $M per unit of pSPAR
-        "dollars_per_win_m":   2.852283,   # $M per win (reference)
+        "replacement_m":       0.775,      # $M replacement-level value (= league min)
+        "dollars_per_spar_m":  1.3572,     # $M per unit of pSPAR
+        "dollars_per_win_m":   3.0537,     # $/SPAR × 2.25 (reference)
     },
     "D": {
-        "replacement_m":       1.02,
-        "dollars_per_spar_m":  1.419538,
-        "dollars_per_win_m":   3.193962,
+        "replacement_m":       0.775,
+        "dollars_per_spar_m":  1.4868,
+        "dollars_per_win_m":   3.3453,
     },
 }
 # Salary cap used to calibrate the contract model ($M). Future seasons scale by Proj_Cap_M / BASE_CAP_M.
