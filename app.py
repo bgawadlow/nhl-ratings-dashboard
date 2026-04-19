@@ -14,7 +14,7 @@ from pathlib import Path
 # ── Model import (private, gitignored) ────────────────────────────────────
 try:
     from model import (
-        MARKET_COEFS, OVR_PARAMS, PERF_VARS, DRAFT_MAX_LOOKUP, KNOWN_CAPS,
+        CONTRACT_MODEL, BASE_CAP_M, OVR_PARAMS, PERF_VARS, DRAFT_MAX_LOOKUP, KNOWN_CAPS,
         build_scaled_dataset, build_survival_table, build_survival_model,
         get_survival_prob, get_survival_prob_v3,
         get_projection, get_projection_v3,
