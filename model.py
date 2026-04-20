@@ -734,11 +734,46 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
         # Logistic survival probability (improvement 5)
         surv_prob = get_survival_prob_v3(t_pos, next_age - 1, raw_spar, survival_model)
 
+        # ── Prediction bounds: weighted P10/P90 of cumulative comp trajectories ──
+        # For each comp, look up their actual pSPAR at (t_age + i). Compute their
+        # delta from (t_age) and apply that delta to target's current pSPAR.
+        # Weighted percentiles over these individual "what if target followed
+        # this comp" trajectories give a data-driven range of outcomes.
+        target_pspar_now = float(target["pSPAR"])
+        trajectories = []
+        traj_weights  = []
+        for _, c_row in cohort.iterrows():
+            c_name = c_row["Player"]
+            c_base_age = int(c_row["Age"])
+            c_hist = dataset[dataset["Player"] == c_name]
+            c_curr = c_hist[c_hist["Age"] == c_base_age]
+            c_fut  = c_hist[c_hist["Age"] == c_base_age + i]
+            if c_curr.empty or c_fut.empty:
+                continue
+            c_delta = float(c_fut.iloc[0]["pSPAR"]) - float(c_curr.iloc[0]["pSPAR"])
+            trajectories.append(target_pspar_now + c_delta)
+            traj_weights.append(float(c_row["base_weight"]))
+
+        if trajectories:
+            vals = np.array(trajectories, dtype=float)
+            wts  = np.array(traj_weights, dtype=float)
+            order = np.argsort(vals)
+            vals_s = vals[order]
+            wts_s  = wts[order]
+            cum = np.cumsum(wts_s) / wts_s.sum()
+            pspar_p10 = float(np.interp(0.10, cum, vals_s))
+            pspar_p90 = float(np.interp(0.90, cum, vals_s))
+        else:
+            pspar_p10 = float("nan")
+            pspar_p90 = float("nan")
+
         projections_list.append({
             # pSPAR is a projection for the *next* season, so the displayed age
             # is incremented to match the season being projected.
             "Age": next_age + 1,
             "Predicted_pSPAR": raw_spar,
+            "pSPAR_Low":  pspar_p10,
+            "pSPAR_High": pspar_p90,
             "Survival_Prob": surv_prob,
             "TOI": round(all_toi, 1),
             "Season_Index": f"+{i}",
@@ -754,6 +789,8 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
             # target["pSPAR"] is next-season's projection → bump age to match.
             "Age": t_age + 1,
             "Predicted_pSPAR": float(target["pSPAR"]),
+            "pSPAR_Low":  float(target["pSPAR"]),  # no uncertainty on current
+            "pSPAR_High": float(target["pSPAR"]),
             "Survival_Prob": 1.0,
             "TOI": round(float(target["predict_all_toi"]), 1),
             "Season_Index": "Current",

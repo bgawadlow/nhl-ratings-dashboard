@@ -256,10 +256,21 @@ with tab_contract:
                 pos = spar[(spar["Player"] == cv_player) & (spar["Season"] == cv_season)]["Position"].iloc[0]
                 c3.metric("Position", pos)
 
-                # Projection table
+                # Projection table (with P10/P90 range from weighted comp distribution)
                 st.markdown("**8-Year Aging Curve Projection**")
-                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]].copy()
-                proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
+                st.caption("pSPAR Range shows the 10th–90th percentile of comparable players' trajectories — wider = more uncertainty.")
+                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "pSPAR_Low", "pSPAR_High", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]].copy()
+                # Build a "Low – High" string for display
+                def _range_str(row):
+                    if pd.isna(row["pSPAR_Low"]) or pd.isna(row["pSPAR_High"]):
+                        return "—"
+                    if row["pSPAR_Low"] == row["pSPAR_High"]:
+                        return "—"
+                    return f"{row['pSPAR_Low']:.1f} – {row['pSPAR_High']:.1f}"
+                proj_display["pSPAR Range"] = proj_display.apply(_range_str, axis=1)
+                proj_display = proj_display[["Season_Label", "Age", "Predicted_pSPAR", "pSPAR Range",
+                                             "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]]
+                proj_display.columns = ["Season", "Age", "pSPAR", "pSPAR Range (P10–P90)", "OVR", "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
                 fmt_proj_cv = {"pSPAR": "{:.2f}", "TOI": "{:.1f}", "Survival %": "{:.0%}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
                 st.dataframe(proj_display.style.format(fmt_proj_cv, na_rep="—"), use_container_width=True, hide_index=True)
 
