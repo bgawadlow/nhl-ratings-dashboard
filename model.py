@@ -330,6 +330,11 @@ def build_survival_model(df):
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
 
+    # IMPORTANT CONTRACT: `df` is assumed to contain the most recent available
+    # season. The current season's rows are dropped below because has_next
+    # would be artificially False (no next-year data exists yet). If a caller
+    # wants to hold out additional seasons, they must filter BEFORE passing
+    # df in — this function will only censor the single latest season.
     df = df.copy()
     df = df.sort_values(["Player", "Age"])
     df["has_next"] = df.groupby("Player")["Age"].shift(-1) == df["Age"] + 1
