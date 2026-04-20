@@ -24,7 +24,7 @@ try:
 except ImportError:
     MODEL_AVAILABLE = False
 
-# Build tag: skill-weighted comps v1 (2026-04-19)
+# Build tag: pSPAR bounds v2 (2026-04-20)
 # ── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="NHL 26 Ratings",
@@ -61,9 +61,9 @@ DATA_DIR = Path(__file__).parent / "data"
 
 # Clear all cached data on every fresh deploy so new model logic takes effect
 # immediately without waiting for TTL expiry. No-op after the first run.
-if "cache_cleared_v1" not in st.session_state:
+if "cache_cleared_v2" not in st.session_state:
     st.cache_data.clear()
-    st.session_state["cache_cleared_v1"] = True
+    st.session_state["cache_cleared_v2"] = True
 
 
 # ── Data Loading (cached) ───────────────────────────────────────────────────
@@ -258,19 +258,24 @@ with tab_contract:
 
                 # Projection table (with P10/P90 range from weighted comp distribution)
                 st.markdown("**8-Year Aging Curve Projection**")
-                st.caption("pSPAR Range shows the 10th–90th percentile of comparable players' trajectories — wider = more uncertainty.")
-                proj_display = proj_df[["Season_Label", "Age", "Predicted_pSPAR", "pSPAR_Low", "pSPAR_High", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]].copy()
-                # Build a "Low – High" string for display
-                def _range_str(row):
-                    if pd.isna(row["pSPAR_Low"]) or pd.isna(row["pSPAR_High"]):
-                        return "—"
-                    if row["pSPAR_Low"] == row["pSPAR_High"]:
-                        return "—"
-                    return f"{row['pSPAR_Low']:.1f} – {row['pSPAR_High']:.1f}"
-                proj_display["pSPAR Range"] = proj_display.apply(_range_str, axis=1)
-                proj_display = proj_display[["Season_Label", "Age", "Predicted_pSPAR", "pSPAR Range",
-                                             "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]]
-                proj_display.columns = ["Season", "Age", "pSPAR", "pSPAR Range (P10–P90)", "OVR", "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
+                base_cols = ["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]
+                has_bounds = "pSPAR_Low" in proj_df.columns and "pSPAR_High" in proj_df.columns
+                if has_bounds:
+                    st.caption("pSPAR Range shows the 10th–90th percentile of comparable players' trajectories — wider = more uncertainty.")
+                    proj_display = proj_df[base_cols + ["pSPAR_Low", "pSPAR_High"]].copy()
+                    def _range_str(row):
+                        if pd.isna(row["pSPAR_Low"]) or pd.isna(row["pSPAR_High"]):
+                            return "—"
+                        if row["pSPAR_Low"] == row["pSPAR_High"]:
+                            return "—"
+                        return f"{row['pSPAR_Low']:.1f} – {row['pSPAR_High']:.1f}"
+                    proj_display["pSPAR Range"] = proj_display.apply(_range_str, axis=1)
+                    proj_display = proj_display[["Season_Label", "Age", "Predicted_pSPAR", "pSPAR Range",
+                                                 "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]]
+                    proj_display.columns = ["Season", "Age", "pSPAR", "pSPAR Range (P10–P90)", "OVR", "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
+                else:
+                    proj_display = proj_df[base_cols].copy()
+                    proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
                 fmt_proj_cv = {"pSPAR": "{:.2f}", "TOI": "{:.1f}", "Survival %": "{:.0%}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M"}
                 st.dataframe(proj_display.style.format(fmt_proj_cv, na_rep="—"), use_container_width=True, hide_index=True)
 
