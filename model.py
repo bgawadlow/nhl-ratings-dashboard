@@ -669,6 +669,19 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
         "sh": float(target.get("predict_sh_toi", 0) or 0),
     }
 
+    # ── Pre-build Player+Age -> pSPAR lookup once (outside horizon loop) ──
+    # Avoids O(cohort * dataset) row scans for bounds calc on every year.
+    pspar_lookup = dict(zip(
+        zip(dataset["Player"].values, dataset["Age"].astype(int).values),
+        dataset["pSPAR"].values,
+    ))
+    cohort_info = list(zip(
+        cohort["Player"].values,
+        cohort["Age"].astype(int).values,
+        cohort["pSPAR"].values,
+        cohort["base_weight"].values,
+    ))
+
     projections_list = []
     for i in range(1, 9):
         next_age = t_age + i
@@ -734,28 +747,23 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
         surv_prob = get_survival_prob_v3(t_pos, next_age - 1, raw_spar, survival_model)
 
         # ── Prediction bounds: weighted P10/P90 of cumulative comp trajectories ──
-        # For each comp, look up their actual pSPAR at (t_age + i). Compute their
-        # delta from (t_age) and apply that delta to target's current pSPAR.
-        # Weighted percentiles over these individual "what if target followed
-        # this comp" trajectories give a data-driven range of outcomes.
+        # For each comp, apply their (current -> current+i) pSPAR delta to the
+        # target's current pSPAR. Uses O(1) dict lookups (pspar_lookup) built
+        # once outside the horizon loop.
         target_pspar_now = float(target["pSPAR"])
         trajectories = []
         traj_weights  = []
-        for _, c_row in cohort.iterrows():
-            c_name = c_row["Player"]
-            c_base_age = int(c_row["Age"])
-            c_hist = dataset[dataset["Player"] == c_name]
-            c_curr = c_hist[c_hist["Age"] == c_base_age]
-            c_fut  = c_hist[c_hist["Age"] == c_base_age + i]
-            if c_curr.empty or c_fut.empty:
+        for c_name, c_base_age, c_pspar_now, c_weight in cohort_info:
+            c_fut = pspar_lookup.get((c_name, c_base_age + i))
+            if c_fut is None:
                 continue
-            c_delta = float(c_fut.iloc[0]["pSPAR"]) - float(c_curr.iloc[0]["pSPAR"])
+            c_delta = c_fut - c_pspar_now
             trajectories.append(target_pspar_now + c_delta)
-            traj_weights.append(float(c_row["base_weight"]))
+            traj_weights.append(c_weight)
 
         if trajectories:
-            vals = np.array(trajectories, dtype=float)
-            wts  = np.array(traj_weights, dtype=float)
+            vals = np.asarray(trajectories, dtype=float)
+            wts  = np.asarray(traj_weights, dtype=float)
             order = np.argsort(vals)
             vals_s = vals[order]
             wts_s  = wts[order]
