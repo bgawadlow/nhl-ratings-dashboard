@@ -110,6 +110,8 @@ _FEATURE_WEIGHTS = {
     # Contextual / draft features
     "is_undrafted":      (0.5, 0.0),
     "Draft_Ov_Log":      (0.5, 0.0),
+    # NHL experience — separates rookies from veterans at same age
+    "NHL_Seasons":       (2.0, 0.0),
 }
 _DEFAULT_WEIGHT = (0.5, 0.25)
 
@@ -122,7 +124,6 @@ def skill_weight_mask(z_vars):
     """
     weights = np.empty(len(z_vars), dtype=float)
     for i, zv in enumerate(z_vars):
-        # Strip 'z_' prefix, then detect delta/slope qualifier
         name = zv[2:] if zv.startswith("z_") else zv
         is_delta = name.startswith("d_") or name.startswith("slope2_")
         base = name[2:] if name.startswith("d_") else (name[7:] if name.startswith("slope2_") else name)
@@ -186,6 +187,17 @@ def build_scaled_dataset(spar_df, draft_df):
         if var in df.columns:
             df[f"d_{var}"] = df.groupby("Player")[var].diff()  # NaN for first season
 
+    # ── NHL experience: seasons played to-date (including current) ──
+    # Differentiates rookies from veterans at the same age (e.g., 25yo late-
+    # bloomer on year 1 vs 25yo top pick on year 5+). Avoids cross-tenure
+    # comp matches that the age filter alone can't prevent.
+    df["NHL_Seasons"] = df.groupby("Player").cumcount() + 1
+
+    # Lagged features were tested (see backtest_nhl_seasons.py) and rejected:
+    # they helped mid-tier (pSPAR 3-6) RMSE by ~1% but hurt top-tier (6+) by 4%
+    # because stars have stable trajectories and lags add noise without
+    # discrimination. Deltas + slopes already capture trajectory shape.
+
     # ── 2-year slope / trend (improvement 3b) ──
     # Linear slope over last 2-3 seasons per player per variable
     for var in PERF_VARS:
@@ -207,7 +219,7 @@ def build_scaled_dataset(spar_df, draft_df):
         [v for v in PERF_VARS if v in df.columns]
         + delta_vars
         + slope_vars
-        + ["Draft_Ov_Log", "is_undrafted"]
+        + ["Draft_Ov_Log", "is_undrafted", "NHL_Seasons"]
     )
 
     def safe_scale(s):
@@ -613,7 +625,7 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
         [v for v in PERF_VARS if v in dataset.columns]
         + delta_vars_v
         + slope_vars_v
-        + ["is_undrafted"]
+        + ["is_undrafted", "NHL_Seasons"]
         + (["Draft_Ov_Log"] if t_age <= 26 else [])
     )
     z_vars = [f"z_{v}" for v in active_vars if f"z_{v}" in dataset.columns]
