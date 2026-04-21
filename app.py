@@ -261,18 +261,31 @@ with tab_contract:
                 base_cols = ["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]
                 has_bounds = "pSPAR_Low" in proj_df.columns and "pSPAR_High" in proj_df.columns
                 if has_bounds:
-                    st.caption("pSPAR Range shows the 10th–90th percentile of comparable players' trajectories — wider = more uncertainty.")
+                    st.caption("pSPAR Range shows the 10th–90th percentile of comparable players' trajectories — wider = more uncertainty. OVR Range converts those same bounds via the position's OVR formula.")
                     proj_display = proj_df[base_cols + ["pSPAR_Low", "pSPAR_High"]].copy()
-                    def _range_str(row):
-                        if pd.isna(row["pSPAR_Low"]) or pd.isna(row["pSPAR_High"]):
+                    # Convert pSPAR bounds to OVR bounds using the same formula as Predicted_OVR
+                    o_base, o_mult = OVR_PARAMS[pos]
+                    proj_display["OVR_Low"] = (o_base + o_mult * proj_display["pSPAR_Low"]).round(0)
+                    proj_display["OVR_High"] = (o_base + o_mult * proj_display["pSPAR_High"]).round(0)
+
+                    def _range_str(low, high):
+                        if pd.isna(low) or pd.isna(high) or low == high:
                             return "—"
-                        if row["pSPAR_Low"] == row["pSPAR_High"]:
+                        return f"{low:.1f} – {high:.1f}"
+                    def _ovr_range_str(low, high):
+                        if pd.isna(low) or pd.isna(high) or low == high:
                             return "—"
-                        return f"{row['pSPAR_Low']:.1f} – {row['pSPAR_High']:.1f}"
-                    proj_display["pSPAR Range"] = proj_display.apply(_range_str, axis=1)
+                        return f"{int(low)} – {int(high)}"
+                    proj_display["pSPAR Range"] = proj_display.apply(
+                        lambda r: _range_str(r["pSPAR_Low"], r["pSPAR_High"]), axis=1)
+                    proj_display["OVR Range"] = proj_display.apply(
+                        lambda r: _ovr_range_str(r["OVR_Low"], r["OVR_High"]), axis=1)
                     proj_display = proj_display[["Season_Label", "Age", "Predicted_pSPAR", "pSPAR Range",
-                                                 "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]]
-                    proj_display.columns = ["Season", "Age", "pSPAR", "pSPAR Range (P10–P90)", "OVR", "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
+                                                 "Predicted_OVR", "OVR Range",
+                                                 "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]]
+                    proj_display.columns = ["Season", "Age", "pSPAR", "pSPAR Range (P10–P90)",
+                                            "OVR", "OVR Range (P10–P90)",
+                                            "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
                 else:
                     proj_display = proj_df[base_cols].copy()
                     proj_display.columns = ["Season", "Age", "pSPAR", "OVR", "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
