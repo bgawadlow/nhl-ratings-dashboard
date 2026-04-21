@@ -44,11 +44,14 @@ PERF_VARS = [
     "predict_all_toi", "predict_pp_toi", "predict_sh_toi",
     "Hits82", "Blk82", "PTS82", "G82", "EV_PTS82", "EV_G82",
 ]
-# NOTE: QoC/QoT columns exist in spar.csv (QOC.EV_TOI_Pct, QOT.EV_TOI_Pct, etc.)
-# but were empirically tested as similarity features and gave zero prediction
-# improvement (MAE 0.889 vs 0.890 over 600 targets × 3-year horizons). The
-# SPAR components are already RAPM-adjusted for competition, so QoC adds
-# redundant info. Left out of PERF_VARS intentionally.
+# NOTE: QoC/QoT features tested TWICE as similarity inputs — both rejected.
+#   Test 1: ACTUAL QoC (QOC.EV_TOI_Pct etc. from EH rates files) -> MAE 0.890 vs 0.889
+#   Test 2: PREDICTED QoC (predict_ev_qoc etc. from R script Final Projections CSV)
+#           -> MAE 0.888 vs 0.889 (noise)
+# Both tested on 600 targets × 3-year horizons. Spot checks on role-player cases
+# (Parekh, Hutson, 3rd-pair offensive D) showed lateral comp shuffling, not
+# improvements. RAPM-derived SPAR components already regress out QoC, and
+# TOI features capture deployment indirectly. Left out of PERF_VARS.
 
 SPAR_COMPONENTS = [
     "pEVO_SPAR", "pEVD_SPAR", "pPPO_SPAR", "pSHD_SPAR",
