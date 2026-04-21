@@ -44,6 +44,11 @@ PERF_VARS = [
     "predict_all_toi", "predict_pp_toi", "predict_sh_toi",
     "Hits82", "Blk82", "PTS82", "G82", "EV_PTS82", "EV_G82",
 ]
+# NOTE: QoC/QoT columns exist in spar.csv (QOC.EV_TOI_Pct, QOT.EV_TOI_Pct, etc.)
+# but were empirically tested as similarity features and gave zero prediction
+# improvement (MAE 0.889 vs 0.890 over 600 targets × 3-year horizons). The
+# SPAR components are already RAPM-adjusted for competition, so QoC adds
+# redundant info. Left out of PERF_VARS intentionally.
 
 SPAR_COMPONENTS = [
     "pEVO_SPAR", "pEVD_SPAR", "pPPO_SPAR", "pSHD_SPAR",
