@@ -768,10 +768,10 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
         # Logistic survival probability (improvement 5)
         surv_prob = get_survival_prob_v3(t_pos, next_age - 1, raw_spar, survival_model)
 
-        # ── Prediction bounds: weighted P10/P90 of cumulative comp trajectories ──
+        # ── Prediction bounds: ±1 SD of cumulative comp trajectories ──
         # For each comp, apply their (current -> current+i) pSPAR delta to the
-        # target's current pSPAR. Uses O(1) dict lookups (pspar_lookup) built
-        # once outside the horizon loop.
+        # target's current pSPAR. Compute weighted mean + SD across trajectories.
+        # Also keep P10/P90 available (as pSPAR_P10/_P90) for analytical use.
         target_pspar_now = float(target["pSPAR"])
         trajectories = []
         traj_weights  = []
@@ -786,23 +786,35 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
         if trajectories:
             vals = np.asarray(trajectories, dtype=float)
             wts  = np.asarray(traj_weights, dtype=float)
+            w_sum = wts.sum()
+            # Weighted mean + SD (primary: ±1 SD bounds ~= 68% coverage)
+            w_mean = float((vals * wts).sum() / w_sum)
+            w_var  = float((wts * (vals - w_mean) ** 2).sum() / w_sum)
+            w_sd   = float(np.sqrt(max(w_var, 0.0)))
+            pspar_low  = w_mean - w_sd
+            pspar_high = w_mean + w_sd
+            # Weighted P10/P90 (kept for future analytical use)
             order = np.argsort(vals)
             vals_s = vals[order]
             wts_s  = wts[order]
-            cum = np.cumsum(wts_s) / wts_s.sum()
+            cum = np.cumsum(wts_s) / w_sum
             pspar_p10 = float(np.interp(0.10, cum, vals_s))
             pspar_p90 = float(np.interp(0.90, cum, vals_s))
         else:
-            pspar_p10 = float("nan")
-            pspar_p90 = float("nan")
+            pspar_low  = float("nan")
+            pspar_high = float("nan")
+            pspar_p10  = float("nan")
+            pspar_p90  = float("nan")
 
         projections_list.append({
             # pSPAR is a projection for the *next* season, so the displayed age
             # is incremented to match the season being projected.
             "Age": next_age + 1,
             "Predicted_pSPAR": raw_spar,
-            "pSPAR_Low":  pspar_p10,
-            "pSPAR_High": pspar_p90,
+            "pSPAR_Low":  pspar_low,     # mean - 1 SD
+            "pSPAR_High": pspar_high,    # mean + 1 SD
+            "pSPAR_P10":  pspar_p10,
+            "pSPAR_P90":  pspar_p90,
             "Survival_Prob": surv_prob,
             "TOI": round(all_toi, 1),
             "Season_Index": f"+{i}",
@@ -820,6 +832,8 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
             "Predicted_pSPAR": float(target["pSPAR"]),
             "pSPAR_Low":  float(target["pSPAR"]),  # no uncertainty on current
             "pSPAR_High": float(target["pSPAR"]),
+            "pSPAR_P10":  float(target["pSPAR"]),
+            "pSPAR_P90":  float(target["pSPAR"]),
             "Survival_Prob": 1.0,
             "TOI": round(float(target["predict_all_toi"]), 1),
             "Season_Index": "Current",

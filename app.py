@@ -261,7 +261,7 @@ with tab_contract:
                 base_cols = ["Season_Label", "Age", "Predicted_pSPAR", "Predicted_OVR", "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]
                 has_bounds = "pSPAR_Low" in proj_df.columns and "pSPAR_High" in proj_df.columns
                 if has_bounds:
-                    st.caption("pSPAR Range shows the 10th–90th percentile of comparable players' trajectories — wider = more uncertainty. OVR Range converts those same bounds via the position's OVR formula.")
+                    st.caption("pSPAR Range shows ±1 SD of comparable players' trajectories (~68% of outcomes) — wider = more uncertainty. OVR Range converts those bounds via the position's OVR formula.")
                     proj_display = proj_df[base_cols + ["pSPAR_Low", "pSPAR_High"]].copy()
                     # Convert pSPAR bounds to OVR bounds using the same formula as Predicted_OVR
                     o_base, o_mult = OVR_PARAMS[pos]
@@ -283,8 +283,8 @@ with tab_contract:
                     proj_display = proj_display[["Season_Label", "Age", "Predicted_pSPAR", "pSPAR Range",
                                                  "Predicted_OVR", "OVR Range",
                                                  "TOI", "Survival_Prob", "Proj_Cap_M", "Market_Value_M"]]
-                    proj_display.columns = ["Season", "Age", "pSPAR", "pSPAR Range (P10–P90)",
-                                            "OVR", "OVR Range (P10–P90)",
+                    proj_display.columns = ["Season", "Age", "pSPAR", "pSPAR Range (±1 SD)",
+                                            "OVR", "OVR Range (±1 SD)",
                                             "TOI", "Survival %", "Proj Cap ($M)", "Market Value ($M)"]
                 else:
                     proj_display = proj_df[base_cols].copy()
