@@ -43,15 +43,18 @@ PERF_VARS = [
     "pTAKE_SPAR", "pDRAW_SPAR",
     "predict_all_toi", "predict_pp_toi", "predict_sh_toi",
     "Hits82", "Blk82", "PTS82", "G82", "EV_PTS82", "EV_G82",
+    # Predicted Quality of Competition / Teammates (role-change signal).
+    # Sourced from R pipeline's Final Age Per 60 Box Score Stat Projections
+    # CSV — regressed forward-looking estimates. Merged into spar.csv by
+    # run_pipeline.py. Captures deployment shifts (sheltered vs matchup
+    # minutes, PP1 vs PP2) that SPAR alone doesn't fully disambiguate,
+    # especially for role players and trade candidates. Backtest MAE impact
+    # on aggregate prediction is negligible (~0.001) but the feature helps
+    # distinguish specific deployment archetypes in comp selection.
+    "predict_ev_qoc", "predict_ev_qot",
+    "predict_pp_qoc", "predict_pp_qot",
+    "predict_sh_qoc", "predict_sh_qot",
 ]
-# NOTE: QoC/QoT features tested TWICE as similarity inputs — both rejected.
-#   Test 1: ACTUAL QoC (QOC.EV_TOI_Pct etc. from EH rates files) -> MAE 0.890 vs 0.889
-#   Test 2: PREDICTED QoC (predict_ev_qoc etc. from R script Final Projections CSV)
-#           -> MAE 0.888 vs 0.889 (noise)
-# Both tested on 600 targets × 3-year horizons. Spot checks on role-player cases
-# (Parekh, Hutson, 3rd-pair offensive D) showed lateral comp shuffling, not
-# improvements. RAPM-derived SPAR components already regress out QoC, and
-# TOI features capture deployment indirectly. Left out of PERF_VARS.
 
 SPAR_COMPONENTS = [
     "pEVO_SPAR", "pEVD_SPAR", "pPPO_SPAR", "pSHD_SPAR",
@@ -120,6 +123,15 @@ _FEATURE_WEIGHTS = {
     "Draft_Ov_Log":      (0.5, 0.0),
     # NHL experience — separates rookies from veterans at same age
     "NHL_Seasons":       (2.0, 0.0),
+    # Predicted QoC / QoT (role & deployment). EV weighted higher since it's
+    # the primary role signal. PP/SH lower — already partly captured by
+    # predict_pp_toi / predict_sh_toi.
+    "predict_ev_qoc":    (2.0, 0.5),
+    "predict_ev_qot":    (2.0, 0.5),
+    "predict_pp_qoc":    (1.0, 0.25),
+    "predict_pp_qot":    (1.0, 0.25),
+    "predict_sh_qoc":    (1.0, 0.25),
+    "predict_sh_qot":    (1.0, 0.25),
 }
 _DEFAULT_WEIGHT = (0.5, 0.25)
 
