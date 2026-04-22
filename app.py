@@ -150,8 +150,8 @@ st.caption(
 )
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_ratings, tab_gar, tab_contract, tab_toi, tab_player = st.tabs(
-    ["Ratings", "GAR / SPAR", "Contract Value", "TOI Adjustor", "Player Lookup"]
+tab_ratings, tab_gar, tab_contract, tab_toi, tab_player, tab_compare = st.tabs(
+    ["Ratings", "GAR / SPAR", "Contract Value", "TOI Adjustor", "Player Lookup", "Compare Players"]
 )
 
 # ── Tab 1: Ratings Table ────────────────────────────────────────────────────
@@ -657,3 +657,104 @@ with tab_player:
             if pd.notna(blend_20):
                 sk2.metric("20-22+ Game Blend", f"{blend_20:.0f}")
             st.caption("100 = league average")
+
+
+# ── Tab 6: Compare Players ─────────────────────────────────────────────────
+with tab_compare:
+    st.caption("Compare career trajectories for multiple players. Inspired by DARKO's career-trajectory view.")
+
+    # Merge Age from SPAR into ratings so we can plot by age
+    ratings_age = ratings.merge(
+        spar[["Player", "Season", "Age"]],
+        on=["Player", "Season"],
+        how="left",
+    )
+
+    all_cp_players = sorted(ratings["Player"].dropna().unique())
+
+    # Pick a sensible default set (a handful of stars, if present)
+    default_stars = [p for p in ["CONNOR.MCDAVID", "NATHAN.MACKINNON", "LEON.DRAISAITL",
+                                  "AUSTON.MATTHEWS", "NIKITA.KUCHEROV"]
+                     if p in set(all_cp_players)][:4]
+
+    cp_col1, cp_col2, cp_col3 = st.columns([3, 1, 1])
+    with cp_col1:
+        selected_players = st.multiselect(
+            "Select players (up to 10)",
+            options=all_cp_players,
+            default=default_stars,
+            max_selections=10,
+            key="cp_players",
+        )
+    with cp_col2:
+        x_axis_choice = st.radio("X-axis", ["Age", "Season"], horizontal=False, key="cp_xaxis")
+    with cp_col3:
+        # Y-axis stat options (descending priority / UX order)
+        y_options = ["OVR", "pSPAR", "Off", "Def", "Draw", "Take",
+                     "G", "PTS", "EV G", "EV PTS", "Hits", "Blocks",
+                     "TOI/GP", "TOI/PP", "FO"]
+        y_stat = st.selectbox("Y-axis stat", options=y_options, index=0, key="cp_ystat")
+
+    if not selected_players:
+        st.info("Select one or more players to compare.")
+    else:
+        # Build the long-form dataframe for plotting
+        sub = ratings_age[ratings_age["Player"].isin(selected_players)].copy()
+        if sub.empty or y_stat not in sub.columns:
+            st.warning(f"No data available for the selected players / stat ({y_stat}).")
+        else:
+            # Keep only rows with both Age and the stat populated
+            sub = sub.dropna(subset=[y_stat])
+            if x_axis_choice == "Age":
+                sub = sub.dropna(subset=["Age"])
+            # Sort so line chart traces are monotonic
+            sort_col = "Age" if x_axis_choice == "Age" else "Season"
+            sub = sub.sort_values(["Player", sort_col])
+
+            # Seasons are strings ("07-08") — use explicit ordered list for the x-axis
+            season_sort = sorted(ratings_age["Season"].dropna().unique())
+
+            # Altair multi-line chart
+            encode_x = (alt.X("Age:Q", scale=alt.Scale(zero=False), title="Age")
+                        if x_axis_choice == "Age"
+                        else alt.X("Season:N", sort=season_sort, title="Season"))
+            chart = (
+                alt.Chart(sub)
+                .mark_line(point=True, strokeWidth=2.5)
+                .encode(
+                    x=encode_x,
+                    y=alt.Y(f"{y_stat}:Q", title=y_stat),
+                    color=alt.Color("Player:N", legend=alt.Legend(title="Player")),
+                    tooltip=[
+                        "Player", "Season", "Age", "Team", "Position",
+                        alt.Tooltip(f"{y_stat}:Q", format=".2f"),
+                        "OVR", "pSPAR",
+                    ],
+                )
+                .properties(height=460)
+                .interactive()
+            )
+            st.altair_chart(chart, use_container_width=True)
+
+            # Data table below (current selections, sorted)
+            st.markdown("**Data**")
+            cols_to_show = ["Player", "Season", "Age", "Team", "Position", y_stat]
+            # Include OVR and pSPAR as context columns if not already selected
+            for extra in ("OVR", "pSPAR"):
+                if extra not in cols_to_show and extra in sub.columns:
+                    cols_to_show.append(extra)
+            display_df = sub[cols_to_show].copy()
+            # Format: Age as int, numeric stats to 2 decimals where applicable
+            if "Age" in display_df.columns:
+                display_df["Age"] = display_df["Age"].astype("Int64")
+            num_cols = [c for c in display_df.select_dtypes(include="number").columns if c != "Age"]
+            fmt = {c: "{:.2f}" for c in num_cols}
+            # Integer-ish counts
+            for c in ("OVR", "G", "PTS", "EV G", "EV PTS", "Hits", "Blocks", "FO"):
+                if c in fmt: fmt[c] = "{:.0f}"
+            st.dataframe(
+                display_df.style.format(fmt, na_rep="—"),
+                use_container_width=True,
+                hide_index=True,
+                height=320,
+            )
