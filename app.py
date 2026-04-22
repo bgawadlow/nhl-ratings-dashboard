@@ -677,7 +677,7 @@ with tab_compare:
                                   "AUSTON.MATTHEWS", "NIKITA.KUCHEROV"]
                      if p in set(all_cp_players)][:4]
 
-    cp_col1, cp_col2, cp_col3 = st.columns([3, 1, 1])
+    cp_col1, cp_col2, cp_col3, cp_col4 = st.columns([3, 1, 1, 1])
     with cp_col1:
         selected_players = st.multiselect(
             "Select players (up to 10)",
@@ -694,6 +694,9 @@ with tab_compare:
                      "G", "PTS", "EV G", "EV PTS", "Hits", "Blocks",
                      "TOI/GP", "TOI/PP", "FO"]
         y_stat = st.selectbox("Y-axis stat", options=y_options, index=0, key="cp_ystat")
+    with cp_col4:
+        show_labels = st.checkbox("Show labels", value=False, key="cp_labels",
+                                  help="Display the numeric value at each data point")
 
     if not selected_players:
         st.info("Select one or more players to compare.")
@@ -714,26 +717,55 @@ with tab_compare:
             # Seasons are strings ("07-08") — use explicit ordered list for the x-axis
             season_sort = sorted(ratings_age["Season"].dropna().unique())
 
-            # Altair multi-line chart
+            # Calibrate Y domain to the actual selected data (with small pad)
+            y_min = float(sub[y_stat].min())
+            y_max = float(sub[y_stat].max())
+            span = y_max - y_min
+            # Pad: 8% of range (or at least 1 unit for tiny spans) on each side
+            pad = max(span * 0.08, 1.0 if span < 5 else span * 0.08)
+            y_low = y_min - pad
+            y_high = y_max + pad
+            # Floor the low bound to 0 for non-negative stats (counts, etc.)
+            if y_stat in ("G", "PTS", "EV G", "EV PTS", "Hits", "Blocks",
+                          "TOI/GP", "TOI/PP", "FO", "Draw", "Take") and y_low < 0:
+                y_low = 0
+
+            # Altair multi-line chart — legend below, calibrated Y axis
             encode_x = (alt.X("Age:Q", scale=alt.Scale(zero=False), title="Age")
                         if x_axis_choice == "Age"
                         else alt.X("Season:N", sort=season_sort, title="Season"))
-            chart = (
-                alt.Chart(sub)
-                .mark_line(point=True, strokeWidth=2.5)
-                .encode(
-                    x=encode_x,
-                    y=alt.Y(f"{y_stat}:Q", title=y_stat),
-                    color=alt.Color("Player:N", legend=alt.Legend(title="Player")),
-                    tooltip=[
-                        "Player", "Season", "Age", "Team", "Position",
-                        alt.Tooltip(f"{y_stat}:Q", format=".2f"),
-                        "OVR", "pSPAR",
-                    ],
-                )
-                .properties(height=460)
-                .interactive()
+            encode_y = alt.Y(f"{y_stat}:Q",
+                             scale=alt.Scale(domain=[y_low, y_high], nice=False),
+                             title=y_stat)
+            color_enc = alt.Color(
+                "Player:N",
+                legend=alt.Legend(title="Player", orient="bottom", columns=5,
+                                  labelLimit=200, symbolStrokeWidth=3),
             )
+            tooltip_enc = [
+                "Player", "Season", "Age", "Team", "Position",
+                alt.Tooltip(f"{y_stat}:Q", format=".2f"),
+                "OVR", "pSPAR",
+            ]
+
+            base = alt.Chart(sub).encode(
+                x=encode_x, y=encode_y, color=color_enc, tooltip=tooltip_enc,
+            )
+            line_layer = base.mark_line(point=True, strokeWidth=2.5)
+
+            # Optional numeric labels above each point
+            if show_labels:
+                # Integer formatting for count-like stats, otherwise 2 decimals
+                is_int = y_stat in ("OVR", "G", "PTS", "EV G", "EV PTS",
+                                    "Hits", "Blocks", "FO")
+                label_fmt = ".0f" if is_int else ".2f"
+                label_layer = base.mark_text(
+                    align="center", baseline="bottom", dy=-8, fontSize=10,
+                ).encode(text=alt.Text(f"{y_stat}:Q", format=label_fmt))
+                chart = (line_layer + label_layer).properties(height=460).interactive()
+            else:
+                chart = line_layer.properties(height=460).interactive()
+
             st.altair_chart(chart, use_container_width=True)
 
             # Data table below (current selections, sorted)
