@@ -308,7 +308,9 @@ with tab_contract:
                 with prop_col2:
                     user_term = st.slider("Term (Years)", 1, 8, 4, key="cv_term")
 
-                future = proj_df[proj_df["Season_Index"] != "Current"].head(user_term).copy()
+                # Contract starts NEXT season (the "Current" row's label is that season),
+                # so Term-N = first N rows starting from Current.
+                future = proj_df.head(user_term).copy()
                 future["Surplus"] = future["Market_Value_M"] - user_aav
                 total_surplus = future["Surplus"].sum()
 

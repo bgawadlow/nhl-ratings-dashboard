@@ -873,10 +873,13 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
     base_value = contract["replacement_m"] + contract["dollars_per_spar_m"] * proj_df["Predicted_pSPAR"]
     proj_df["Market_Value_M"] = (base_value * (proj_df["Proj_Cap_M"] / BASE_CAP_M)).clip(lower=LEAGUE_MIN_SALARY)
 
-    future = proj_df[proj_df["Season_Index"] != "Current"].reset_index(drop=True)
+    # Contract table: a deal signed NOW takes effect NEXT season, which is the
+    # "Current" row (Season_Label is the season the projection covers).
+    # So Term-1 = Current's value, Term-8 = Current + +1 .. +6 (8 rows total).
+    contract_seasons = proj_df.head(8).reset_index(drop=True)
     contract_table = pd.DataFrame({
-        "Term": range(1, 9),
-        "Total_Value_M": future["Market_Value_M"].cumsum().round(2),
+        "Term": range(1, len(contract_seasons) + 1),
+        "Total_Value_M": contract_seasons["Market_Value_M"].cumsum().round(2),
     })
     contract_table["AAV_M"] = (contract_table["Total_Value_M"] / contract_table["Term"]).round(3)
 
