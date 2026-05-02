@@ -15,6 +15,7 @@ from pathlib import Path
 try:
     from model import (
         CONTRACT_MODEL, BASE_CAP_M, OVR_PARAMS, PERF_VARS, DRAFT_MAX_LOOKUP, KNOWN_CAPS,
+        LEAGUE_MIN_SALARY,
         build_scaled_dataset, build_survival_table, build_survival_model,
         get_survival_prob, get_survival_prob_v3,
         get_projection, get_projection_v3,
@@ -23,6 +24,11 @@ try:
     MODEL_AVAILABLE = True
 except ImportError:
     MODEL_AVAILABLE = False
+
+# Standard normal CDF — used for positive-value probability
+from math import erf, sqrt as _sqrt
+def _norm_cdf(z: float) -> float:
+    return 0.5 * (1.0 + erf(z / _sqrt(2.0)))
 
 # Build tag: pSPAR bounds v2 (2026-04-20)
 # ── Page Config ──────────────────────────────────────────────────────────────
@@ -299,36 +305,178 @@ with tab_contract:
                 fmt_ct = {"Total Value ($M)": "${:.2f}M", "AAV ($M)": "${:.3f}M"}
                 st.dataframe(ct_display.style.format(fmt_ct), use_container_width=True, hide_index=True)
 
-                # Contract proposal analyzer
+                # ── Contract Proposal Analyzer (visual upgrade) ──
                 st.markdown("---")
-                st.markdown("**Evaluate a Contract Proposal**")
+                st.markdown("### Evaluate a Contract Proposal")
+
                 prop_col1, prop_col2 = st.columns(2)
                 with prop_col1:
-                    user_aav = st.number_input("Proposed AAV ($M)", min_value=0.0, max_value=20.0, value=5.0, step=0.25, key="cv_aav")
+                    user_aav = st.number_input("Proposed AAV ($M)", min_value=0.0, max_value=20.0,
+                                               value=5.0, step=0.25, key="cv_aav")
                 with prop_col2:
                     user_term = st.slider("Term (Years)", 1, 8, 4, key="cv_term")
 
-                # Contract starts NEXT season (the "Current" row's label is that season),
-                # so Term-N = first N rows starting from Current.
+                # Term-N = first N rows of proj_df (Current is year 1, taking effect next season)
                 future = proj_df.head(user_term).copy()
                 future["Surplus"] = future["Market_Value_M"] - user_aav
-                total_surplus = future["Surplus"].sum()
 
-                if total_surplus > 0:
-                    st.success(f"BARGAIN — Total surplus: **${total_surplus:.2f}M** over {user_term} years")
+                # ── Per-year positive-value probability ──
+                # Using the pSPAR ±1 SD bounds, compute SD, then P(MV > AAV).
+                # MV = (replacement + $/SPAR × pSPAR) × (cap / BASE_CAP)
+                # Solve breakeven_pSPAR for AAV, then P(pSPAR > breakeven) via Normal CDF.
+                contract_params = CONTRACT_MODEL[pos]
+                repl, dps = contract_params["replacement_m"], contract_params["dollars_per_spar_m"]
+
+                future["pSPAR_SD"] = (future["pSPAR_High"] - future["Predicted_pSPAR"]).clip(lower=0.01)
+                future["Cap_Ratio"] = future["Proj_Cap_M"] / BASE_CAP_M
+                future["Breakeven_pSPAR"] = (user_aav / future["Cap_Ratio"] - repl) / dps
+                future["P_Positive"] = future.apply(
+                    lambda r: _norm_cdf((r["Predicted_pSPAR"] - r["Breakeven_pSPAR"]) / r["pSPAR_SD"]),
+                    axis=1
+                )
+                # Special case: Current row has SD=0 so P_Positive comes out NaN — set deterministically
+                future.loc[future["Season_Index"] == "Current", "P_Positive"] = (
+                    (future.loc[future["Season_Index"] == "Current", "Market_Value_M"] > user_aav).astype(float)
+                )
+
+                total_surplus = float(future["Surplus"].sum())
+                # Total surplus distribution — independent-year approximation
+                total_mean = float(future["Surplus"].sum())
+                total_sd = float(np.sqrt((future["pSPAR_SD"] * dps * future["Cap_Ratio"]).pow(2).sum()))
+                if total_sd > 0:
+                    p_positive_total = _norm_cdf(total_mean / total_sd)
                 else:
-                    st.error(f"OVERPAY — Total deficit: **${total_surplus:.2f}M** over {user_term} years")
+                    p_positive_total = 1.0 if total_mean > 0 else 0.0
 
-                # Surplus chart
-                chart_df = future[["Age", "Market_Value_M"]].set_index("Age")
-                chart_df["Proposed AAV"] = user_aav
-                chart_df.columns = ["Market Value", "Proposed AAV"]
-                st.line_chart(chart_df)
+                # ── Headline metric cards (Dom-style) ──
+                m1, m2, m3, m4 = st.columns(4)
+                fair_total = float(future["Market_Value_M"].sum())
+                fair_aav = fair_total / user_term
+                m1.metric("Fair AAV", f"${fair_aav:.2f}M",
+                          f"{(fair_aav - user_aav):+.2f}M vs proposed",
+                          delta_color="normal")
+                m2.metric("Total Contract Value", f"${user_aav * user_term:.1f}M",
+                          f"vs ${fair_total:.1f}M fair")
+                if total_surplus >= 0:
+                    m3.metric("Surplus", f"+${total_surplus:.2f}M", "team gains value",
+                              delta_color="normal")
+                else:
+                    m3.metric("Deficit", f"-${abs(total_surplus):.2f}M", "team overpays",
+                              delta_color="inverse")
+                # Probability with simple verdict
+                m4.metric("Net Positive Probability", f"{p_positive_total*100:.0f}%",
+                          "chance contract is a win for team")
 
-                # Year-by-year breakdown
-                breakdown = future[["Season_Label", "Age", "Predicted_OVR", "Survival_Prob", "Proj_Cap_M", "Market_Value_M", "Surplus"]].copy()
-                breakdown.columns = ["Year", "Age", "Proj OVR", "Survival %", "Proj Cap ($M)", "Market Value ($M)", "Surplus ($M)"]
-                fmt_bd = {"Survival %": "{:.0%}", "Proj Cap ($M)": "${:.1f}M", "Market Value ($M)": "${:.2f}M", "Surplus ($M)": "${:.2f}M"}
+                # ── Verdict banner ──
+                if p_positive_total >= 0.70:
+                    st.success(f"✅ **STRONG BARGAIN** — {p_positive_total*100:.0f}% probability of positive value over {user_term} years")
+                elif p_positive_total >= 0.55:
+                    st.success(f"👍 **LIKELY BARGAIN** — {p_positive_total*100:.0f}% probability of positive value")
+                elif p_positive_total >= 0.45:
+                    st.info(f"⚖️ **FAIR DEAL** — {p_positive_total*100:.0f}% probability of positive value (essentially a coin flip)")
+                elif p_positive_total >= 0.30:
+                    st.warning(f"⚠️ **LIKELY OVERPAY** — only {p_positive_total*100:.0f}% probability of positive value")
+                else:
+                    st.error(f"❌ **STRONG OVERPAY** — only {p_positive_total*100:.0f}% probability of positive value")
+
+                # ── Year-by-year visual: Market Value bars vs AAV reference line ──
+                future_chart = future.copy()
+                future_chart["AAV"] = user_aav
+                future_chart["Surplus_Color"] = future_chart["Surplus"].apply(
+                    lambda s: "Surplus" if s >= 0 else "Deficit"
+                )
+
+                bars = (
+                    alt.Chart(future_chart)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("Season_Label:N", sort=list(future_chart["Season_Label"]),
+                                title="Season"),
+                        y=alt.Y("Market_Value_M:Q", title="Value ($M)",
+                                scale=alt.Scale(domainMin=0)),
+                        color=alt.Color("Surplus_Color:N",
+                                        scale=alt.Scale(domain=["Surplus", "Deficit"],
+                                                        range=["#2ecc71", "#e74c3c"]),
+                                        legend=alt.Legend(title="vs AAV", orient="top")),
+                        tooltip=[
+                            alt.Tooltip("Season_Label", title="Season"),
+                            alt.Tooltip("Age:Q"),
+                            alt.Tooltip("Predicted_pSPAR:Q", title="pSPAR", format=".2f"),
+                            alt.Tooltip("Predicted_OVR:Q", title="OVR"),
+                            alt.Tooltip("Market_Value_M:Q", title="Market Value", format="$.2f"),
+                            alt.Tooltip("Surplus:Q", title="Surplus", format="$+.2f"),
+                            alt.Tooltip("P_Positive:Q", title="P(Positive Value)", format=".0%"),
+                        ],
+                    )
+                )
+                # AAV reference line
+                aav_line = (
+                    alt.Chart(future_chart)
+                    .mark_line(color="#34495e", strokeDash=[6, 4], strokeWidth=2.5)
+                    .encode(
+                        x=alt.X("Season_Label:N", sort=list(future_chart["Season_Label"])),
+                        y="AAV:Q",
+                    )
+                )
+                aav_label = (
+                    alt.Chart(future_chart.head(1))
+                    .mark_text(text=f"AAV ${user_aav:.2f}M", color="#34495e",
+                               align="left", baseline="bottom", dx=5, dy=-5,
+                               fontWeight="bold")
+                    .encode(
+                        x=alt.X("Season_Label:N", sort=list(future_chart["Season_Label"])),
+                        y="AAV:Q",
+                    )
+                )
+                st.altair_chart(
+                    (bars + aav_line + aav_label).properties(height=360, title="Year-by-year market value vs proposed AAV"),
+                    use_container_width=True,
+                )
+
+                # ── Per-year probability bar chart ──
+                prob_chart = (
+                    alt.Chart(future_chart)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("Season_Label:N", sort=list(future_chart["Season_Label"]),
+                                title="Season"),
+                        y=alt.Y("P_Positive:Q",
+                                scale=alt.Scale(domain=[0, 1]),
+                                axis=alt.Axis(format=".0%"),
+                                title="P(Positive Value)"),
+                        color=alt.Color(
+                            "P_Positive:Q",
+                            scale=alt.Scale(domain=[0, 0.5, 1.0],
+                                            range=["#e74c3c", "#f39c12", "#2ecc71"]),
+                            legend=None,
+                        ),
+                        tooltip=[
+                            alt.Tooltip("Season_Label", title="Season"),
+                            alt.Tooltip("P_Positive:Q", title="P(positive)", format=".0%"),
+                            alt.Tooltip("Predicted_pSPAR:Q", title="pSPAR", format=".2f"),
+                            alt.Tooltip("Breakeven_pSPAR:Q", title="Breakeven pSPAR", format=".2f"),
+                        ],
+                    )
+                )
+                st.altair_chart(
+                    prob_chart.properties(height=200, title="Per-year probability the contract is positive value"),
+                    use_container_width=True,
+                )
+
+                # Year-by-year breakdown table (now includes P_Positive)
+                breakdown = future[["Season_Label", "Age", "Predicted_OVR",
+                                    "Predicted_pSPAR", "pSPAR_Low", "pSPAR_High",
+                                    "Survival_Prob", "Proj_Cap_M", "Market_Value_M",
+                                    "Surplus", "P_Positive"]].copy()
+                breakdown.columns = ["Year", "Age", "OVR", "pSPAR", "pSPAR Low", "pSPAR High",
+                                     "Survival %", "Proj Cap ($M)", "Market Value ($M)",
+                                     "Surplus ($M)", "P(Positive)"]
+                fmt_bd = {
+                    "pSPAR": "{:.2f}", "pSPAR Low": "{:.2f}", "pSPAR High": "{:.2f}",
+                    "Survival %": "{:.0%}", "Proj Cap ($M)": "${:.1f}M",
+                    "Market Value ($M)": "${:.2f}M", "Surplus ($M)": "${:+.2f}M",
+                    "P(Positive)": "{:.0%}",
+                }
                 st.dataframe(breakdown.style.format(fmt_bd), use_container_width=True, hide_index=True)
 
                 # Top comps
