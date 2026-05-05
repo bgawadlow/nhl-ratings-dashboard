@@ -328,21 +328,34 @@ with tab_contract:
                 repl, dps = contract_params["replacement_m"], contract_params["dollars_per_spar_m"]
 
                 future["pSPAR_SD"] = (future["pSPAR_High"] - future["Predicted_pSPAR"]).clip(lower=0.01)
+                # Current-row uncertainty: target pSPAR is the R model's projection — itself
+                # noisy. Use the +1 row's SD as a proxy (years 0 and 1 share similar
+                # projection noise). Without this, Year 1 always shows 100% P_positive.
+                if (future["Season_Index"] == "Current").any() and len(future) > 1:
+                    next_row_sd = float(future.iloc[1]["pSPAR_SD"])
+                    if next_row_sd > 0.05:
+                        idx = future.index[future["Season_Index"] == "Current"]
+                        future.loc[idx, "pSPAR_SD"] = next_row_sd
                 future["Cap_Ratio"] = future["Proj_Cap_M"] / BASE_CAP_M
                 future["Breakeven_pSPAR"] = (user_aav / future["Cap_Ratio"] - repl) / dps
                 future["P_Positive"] = future.apply(
                     lambda r: _norm_cdf((r["Predicted_pSPAR"] - r["Breakeven_pSPAR"]) / r["pSPAR_SD"]),
                     axis=1
                 )
-                # Special case: Current row has SD=0 so P_Positive comes out NaN — set deterministically
-                future.loc[future["Season_Index"] == "Current", "P_Positive"] = (
-                    (future.loc[future["Season_Index"] == "Current", "Market_Value_M"] > user_aav).astype(float)
-                )
 
                 total_surplus = float(future["Surplus"].sum())
-                # Total surplus distribution — independent-year approximation
+                # ── Total contract SD with year-to-year correlation ──
+                # pSPAR is highly autocorrelated: a player who regresses one year tends
+                # to stay regressed. Independent-year assumption (var sum) is too narrow.
+                # Use ρ=0.70 between years (typical for player-talent autocorrelation).
+                # Var(total) = Σ σᵢ² + 2ρ Σᵢ<ⱼ σᵢσⱼ = Σ σᵢ² + ρ × ((Σ σᵢ)² − Σ σᵢ²)
+                yearly_value_sd = (future["pSPAR_SD"] * dps * future["Cap_Ratio"]).values
+                rho = 0.70
+                ssq = float((yearly_value_sd ** 2).sum())
+                ssum = float(yearly_value_sd.sum())
+                total_var = ssq + rho * (ssum ** 2 - ssq)
+                total_sd = float(np.sqrt(max(total_var, 0.0)))
                 total_mean = float(future["Surplus"].sum())
-                total_sd = float(np.sqrt((future["pSPAR_SD"] * dps * future["Cap_Ratio"]).pow(2).sum()))
                 if total_sd > 0:
                     p_positive_total = _norm_cdf(total_mean / total_sd)
                 else:
