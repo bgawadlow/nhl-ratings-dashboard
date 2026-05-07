@@ -61,8 +61,32 @@ SPAR_COMPONENTS = [
     "pTAKE_SPAR", "pDRAW_SPAR",
 ]
 
-# Known salary caps by season start year
-KNOWN_CAPS = {2026: 95.5, 2027: 104.0, 2028: 113.5}
+# Known salary caps by season-start year (i.e. 2025 = the 25-26 season).
+# Historical values are exact league numbers; future values 2026-2028 are
+# the league's officially announced caps. Anything beyond 2028 is projected
+# in get_cap() at POST_2028_CAP_GROWTH per year.
+KNOWN_CAPS = {
+    # historic
+    2005: 39.0,  2006: 44.0,  2007: 50.3,  2008: 56.7,  2009: 56.8,
+    2010: 59.4,  2011: 64.3,  2012: 60.0,  2013: 64.3,  2014: 69.0,
+    2015: 71.4,  2016: 73.0,  2017: 75.0,  2018: 79.5,  2019: 81.5,
+    2020: 81.5,  2021: 81.5,  2022: 82.5,  2023: 83.5,  2024: 88.0,
+    # current + officially announced
+    2025: 95.5,  2026: 104.0, 2027: 113.5,
+}
+POST_2028_CAP_GROWTH = 0.05  # 5% annual cap growth assumed beyond 2028
+
+# League minimum salary ($M) by season-start year (one-way contract).
+# Sourced from CBA history. Used as the floor for fair-value projections so
+# that a replacement-level player never has a fair value below the league min
+# for that season.
+LEAGUE_MIN_BY_YEAR = {
+    2005: 0.450, 2006: 0.450, 2007: 0.475, 2008: 0.500, 2009: 0.500,
+    2010: 0.500, 2011: 0.525, 2012: 0.525, 2013: 0.550, 2014: 0.550,
+    2015: 0.575, 2016: 0.575, 2017: 0.650, 2018: 0.650, 2019: 0.700,
+    2020: 0.700, 2021: 0.750, 2022: 0.750, 2023: 0.775, 2024: 0.775,
+    2025: 0.775, 2026: 0.775, 2027: 0.775,
+}
 
 # Fixed value for all undrafted players (instead of per-year max_pick + 1)
 UNDRAFTED_PICK_VALUE = 250
@@ -74,10 +98,34 @@ LEAGUE_MIN_SALARY = 0.775
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 def get_cap(season_start_year):
-    """Return projected salary cap ($M) for a given season start year."""
+    """Return salary cap ($M) for a given season-start year.
+
+    Historic and announced years come straight from KNOWN_CAPS. Years before
+    KNOWN_CAPS' floor fall back to the earliest known value (cap-era only —
+    pre-2005 doesn't really apply). Years beyond KNOWN_CAPS' top grow at
+    POST_2028_CAP_GROWTH off the most recently announced anchor.
+    """
     if season_start_year in KNOWN_CAPS:
         return KNOWN_CAPS[season_start_year]
-    return round(113.5 * (1.05 ** (season_start_year - 2028)), 1)
+    if season_start_year < min(KNOWN_CAPS):
+        return KNOWN_CAPS[min(KNOWN_CAPS)]
+    last_known_year = max(KNOWN_CAPS)
+    return round(KNOWN_CAPS[last_known_year]
+                  * ((1 + POST_2028_CAP_GROWTH) ** (season_start_year - last_known_year)), 1)
+
+
+def get_league_min(season_start_year):
+    """Return league minimum salary ($M) for a given season-start year.
+
+    Falls back to the most recent known value for years past the table's top
+    (the next CBA hasn't been negotiated yet, so this is the conservative
+    floor — current CBA's final $0.775M).
+    """
+    if season_start_year in LEAGUE_MIN_BY_YEAR:
+        return LEAGUE_MIN_BY_YEAR[season_start_year]
+    if season_start_year < min(LEAGUE_MIN_BY_YEAR):
+        return LEAGUE_MIN_BY_YEAR[min(LEAGUE_MIN_BY_YEAR)]
+    return LEAGUE_MIN_BY_YEAR[max(LEAGUE_MIN_BY_YEAR)]
 
 
 def ovr_f(spar_val):
@@ -469,16 +517,18 @@ def get_projection(target_name, target_season, dataset):
 
     proj_df["Predicted_OVR"] = (o_base + o_mult * proj_df["Predicted_pSPAR"]).round(0).astype(int)
 
-    base_cap_year = int(target["Season_Num"]) + 1
+    base_cap_year = int(target["Season_Num"])
     proj_df["Proj_Cap_M"] = [get_cap(base_cap_year + i) for i in range(len(proj_df))]
-
     proj_df["Season_Label"] = [
-        f"{(base_cap_year + i) % 100 - 1:02d}-{(base_cap_year + i) % 100:02d}"
+        f"{(base_cap_year + i) % 100:02d}-{(base_cap_year + i + 1) % 100:02d}"
         for i in range(len(proj_df))
     ]
 
     base_value = contract["replacement_m"] + contract["dollars_per_spar_m"] * proj_df["Predicted_pSPAR"]
     proj_df["Market_Value_M"] = base_value * (proj_df["Proj_Cap_M"] / BASE_CAP_M)
+    _years = [base_cap_year + i for i in range(len(proj_df))]
+    proj_df["League_Min_M"] = [get_league_min(y) for y in _years]
+    proj_df["Market_Value_M"] = proj_df[["Market_Value_M", "League_Min_M"]].max(axis=1)
 
     future = proj_df[proj_df["Season_Index"] != "Current"].reset_index(drop=True)
     contract_table = pd.DataFrame({
@@ -616,16 +666,18 @@ def get_projection_v2(target_name, target_season, dataset, survival_table,
 
     proj_df["Predicted_OVR"] = (o_base + o_mult * proj_df["Predicted_pSPAR"]).round(0).astype(int)
 
-    base_cap_year = int(target["Season_Num"]) + 1
+    base_cap_year = int(target["Season_Num"])
     proj_df["Proj_Cap_M"] = [get_cap(base_cap_year + i) for i in range(len(proj_df))]
-
     proj_df["Season_Label"] = [
-        f"{(base_cap_year + i) % 100 - 1:02d}-{(base_cap_year + i) % 100:02d}"
+        f"{(base_cap_year + i) % 100:02d}-{(base_cap_year + i + 1) % 100:02d}"
         for i in range(len(proj_df))
     ]
 
     base_value = contract["replacement_m"] + contract["dollars_per_spar_m"] * proj_df["Predicted_pSPAR"]
     proj_df["Market_Value_M"] = base_value * (proj_df["Proj_Cap_M"] / BASE_CAP_M)
+    _years = [base_cap_year + i for i in range(len(proj_df))]
+    proj_df["League_Min_M"] = [get_league_min(y) for y in _years]
+    proj_df["Market_Value_M"] = proj_df[["Market_Value_M", "League_Min_M"]].max(axis=1)
 
     future = proj_df[proj_df["Season_Index"] != "Current"].reset_index(drop=True)
     contract_table = pd.DataFrame({
@@ -863,15 +915,26 @@ def get_projection_v3(target_name, target_season, dataset, survival_model,
 
     proj_df["Predicted_OVR"] = (o_base + o_mult * proj_df["Predicted_pSPAR"]).round(0).astype(int)
 
-    base_cap_year = int(target["Season_Num"]) + 1
+    # Season_Num here is the END calendar year of the player's current season
+    # (e.g., "25-26" → 2026), which equals the START calendar year of the FIRST
+    # projected season ("26-27"). So base_cap_year + i is the start year of
+    # projected season i, which is exactly what get_cap() expects.
+    base_cap_year = int(target["Season_Num"])
     proj_df["Proj_Cap_M"] = [get_cap(base_cap_year + i) for i in range(len(proj_df))]
     proj_df["Season_Label"] = [
-        f"{(base_cap_year + i) % 100 - 1:02d}-{(base_cap_year + i) % 100:02d}"
+        f"{(base_cap_year + i) % 100:02d}-{(base_cap_year + i + 1) % 100:02d}"
         for i in range(len(proj_df))
     ]
 
     base_value = contract["replacement_m"] + contract["dollars_per_spar_m"] * proj_df["Predicted_pSPAR"]
-    proj_df["Market_Value_M"] = (base_value * (proj_df["Proj_Cap_M"] / BASE_CAP_M)).clip(lower=LEAGUE_MIN_SALARY)
+    proj_df["Market_Value_M"] = (base_value * (proj_df["Proj_Cap_M"] / BASE_CAP_M))
+    # Floor at the league minimum for each season — replacement-level players
+    # cannot legally cost less than the minimum. Uses the historic min for
+    # past seasons and the latest CBA value (currently $0.775M) for future
+    # seasons not yet negotiated.
+    season_year_for_row = [base_cap_year + i for i in range(len(proj_df))]
+    proj_df["League_Min_M"] = [get_league_min(y) for y in season_year_for_row]
+    proj_df["Market_Value_M"] = proj_df[["Market_Value_M", "League_Min_M"]].max(axis=1)
 
     # Contract table: a deal signed NOW takes effect NEXT season, which is the
     # "Current" row (Season_Label is the season the projection covers).
